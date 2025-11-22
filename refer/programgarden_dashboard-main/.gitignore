@@ -1,0 +1,128 @@
+# ==================================================
+# ProgramGarden Dashboard - Git 관리 설정
+# ==================================================
+
+# Python 캐시 파일 제외
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# 빌드 및 배포 파일 제외
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 개발 환경 파일 제외
+.env
+.venv
+env/
+venv/
+.python-version
+
+# IDE 설정 파일 제외
+.idea/
+.vscode/
+.cursor/
+*.code-workspace
+
+# 시스템 임시 파일 제외
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# 로그 및 데이터베이스 파일 제외
+*.log
+logs/
+*.db
+*.sqlite
+*.sqlite3
+
+# 테스트 및 커버리지 파일 제외
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# 캐시 디렉토리 제외
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# 민감한 설정 파일 제외
+config.ini
+secrets.json
+credentials.json
+appkey.txt
+appsecret.txt
+account_info.txt
+.env.local
+.env.production
+
+# 백업 파일 제외
+*.bak
+*.backup
+*.old
+
+# 개발용 임시 디렉토리 제외
+temp/
+dev_docs/
+dev_tools/
+test_data/
+screenshots/
+*_old/
+*_backup/
+*_temp/
+
+# 라이브러리 배포 관련 추가 제외
+.twine/
+*.whl
+*.tar.gz
+
+# 문서 빌드 결과 제외
+docs/_build/
+site/
+
+# 성능 프로파일링 결과
+*.prof
+profile_results/
+
+# Node.js 관련 파일 제외 (문서 도구용)
+node_modules/
+package-lock.json
+yarn.lock
+
+# ==================================================
+# 프로젝트별 제외 파일
+# ==================================================
+
+# GitHub 설정 및 워크플로우
+.gitattributes
+.github/
+
+# NiceGUI 관련 캐시
+.nicegui/
+.nicegui_docs/
+
+# 개발/테스트 파일
+debug_grid.py
+x.py
+z.py
+z_custom_dashboard.py
+requirements.txt
+pytest.ini
+
+# 개발 문서
+GOAL.md
+GRID_LAYOUT4_REVIEW.md
+RESPONSIVE.md
+RESPONSIVE2.md

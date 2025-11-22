@@ -1,0 +1,59 @@
+# LS HTS 플랫폼 설정 예제
+# 실제 사용 시 config.yaml로 복사하여 사용
+
+broker:
+  type: "ls"  # ls, kiwoom, korea_invest, mock
+  api_key: ${LS_API_KEY}
+  api_secret: ${LS_API_SECRET}
+  account_id: ${LS_ACCOUNT_ID}
+
+# LS증권 OAuth 설정 (ProgramGarden 호환)
+ls:
+  appkey: ${LS_APPKEY}             # LS증권 앱 키
+  appsecretkey: ${LS_APPSECRETKEY} # LS증권 앱 시크릿 키
+  account_id: ${LS_ACCOUNT_ID}     # 계좌번호
+  paper_trading: true              # 모의투자 여부 (true: 모의투자, false: 실거래)
+  # base_url은 paper_trading에 따라 자동 설정됨
+  # 실거래: https://openapi.ls-sec.co.kr:8080
+  # 모의투자: https://openapi.ls-sec.co.kr:18080
+
+risk:
+  max_mdd: 0.20  # 최대 MDD 20%
+  max_position_size: 0.10  # 계좌 자산의 10%
+  max_daily_loss: 0.05  # 일일 최대 손실 5%
+
+database:
+  type: "sqlite"  # sqlite, postgresql
+  # SQLite
+  path: "data/hts.db"
+  # PostgreSQL
+  # host: "localhost"
+  # port: 5432
+  # database: "hts_platform"
+  # username: ${DB_USERNAME}
+  # password: ${DB_PASSWORD}
+
+cache:
+  redis_url: "redis://localhost:6379"
+  ttl_seconds: 300  # 5분
+
+storage:
+  type: "local"  # local, minio
+  # Local
+  path: "data/ohlc"
+  # MinIO
+  # endpoint: "localhost:9000"
+  # access_key: ${MINIO_ACCESS_KEY}
+  # secret_key: ${MINIO_SECRET_KEY}
+  # bucket: "ohlc-data"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  jwt_secret: ${JWT_SECRET}
+  jwt_algorithm: "HS256"
+  jwt_expire_minutes: 60
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/hts.log"
