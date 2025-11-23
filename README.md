@@ -1,5 +1,4 @@
-# LS HTS 플랫폼
-
+# HTS
 국내주식 자동매매 시스템 - React + FastAPI
 
 ## 빠른 시작
