@@ -48,6 +48,12 @@ export const PageLayout = ({ children, title, description }: PageLayoutProps) =>
             >
               🔧 전략 빌더
             </Link>
+            <Link 
+              to="/accounts" 
+              className={`nav-link ${location.pathname === '/accounts' ? 'active' : ''}`}
+            >
+              💳 계좌 관리
+            </Link>
           </nav>
           
           {description && <p className="page-description">{description}</p>}

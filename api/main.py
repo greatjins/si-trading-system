@@ -4,7 +4,7 @@ FastAPI 메인 애플리케이션
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder
+from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder, accounts
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -29,6 +29,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/auth", tags=["인증"])
 app.include_router(websocket.router, prefix="/api", tags=["WebSocket"])
 app.include_router(account.router, prefix="/api/account", tags=["계좌"])
+app.include_router(accounts.router, tags=["계좌 관리"])  # 새로운 계좌 관리
 app.include_router(orders.router, prefix="/api/orders", tags=["주문"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["전략 실행"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["전략 관리"])
