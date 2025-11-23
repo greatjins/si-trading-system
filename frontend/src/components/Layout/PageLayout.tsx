@@ -26,7 +26,7 @@ export const PageLayout = ({ children, title, description }: PageLayoutProps) =>
       {/* 헤더 */}
       <header className="page-header">
         <div className="header-left">
-          <h1>{title || 'LS HTS 플랫폼'}</h1>
+          <h1>{title || 'HTS'}</h1>
           
           {/* 네비게이션 */}
           <nav className="nav-links">
@@ -49,10 +49,10 @@ export const PageLayout = ({ children, title, description }: PageLayoutProps) =>
               🔧 전략 빌더
             </Link>
             <Link 
-              to="/accounts" 
-              className={`nav-link ${location.pathname === '/accounts' ? 'active' : ''}`}
+              to="/settings" 
+              className={`nav-link ${location.pathname === '/settings' ? 'active' : ''}`}
             >
-              💳 계좌 관리
+              ⚙️ 설정
             </Link>
           </nav>
           

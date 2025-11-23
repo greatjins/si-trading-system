@@ -132,7 +132,7 @@ cd C:\Users\USER\Downloads
 
 ### 2.3 SSH 접속 (Windows - PowerShell)
 ```powershell
-ssh -i "ls-hts-key.pem" ubuntu@13.125.123.45
+ssh -i "ls-hts-key.pem" ubuntu@3.26.44.24
 ```
 
 ### 2.4 SSH 접속 (Windows - PuTTY 사용 시)

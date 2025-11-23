@@ -13,9 +13,9 @@ export const CHART_INTERVALS = {
 export type ChartInterval = keyof typeof CHART_INTERVALS;
 
 export const CHART_COLORS = {
-  UP: '#26a69a',
-  DOWN: '#ef5350',
-  BACKGROUND: '#1e222d',
-  GRID: '#2a2e39',
-  TEXT: '#d1d4dc',
+  UP: '#1a7f37',
+  DOWN: '#cf222e',
+  BACKGROUND: '#ffffff',
+  GRID: '#e1e4e8',
+  TEXT: '#24292f',
 } as const;

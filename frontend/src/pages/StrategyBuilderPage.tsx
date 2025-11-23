@@ -297,7 +297,14 @@ export const StrategyBuilderPage = () => {
     try {
       const response = await httpClient.post('/api/strategy-builder/save', strategy);
       console.log('✅ 저장 성공:', response.data);
-      alert(`전략이 저장되었습니다!\n\nID: ${response.data.strategy_id}\n이름: ${response.data.name}`);
+      
+      const goToBacktest = confirm(
+        `전략이 저장되었습니다!\n\n이름: ${response.data.name}\n\n백테스트를 실행하시겠습니까?`
+      );
+      
+      if (goToBacktest) {
+        window.location.href = `/backtest?strategy=${response.data.strategy_id}`;
+      }
     } catch (err: any) {
       console.error('❌ 저장 실패:', err);
       alert(`저장 실패: ${err.response?.data?.detail || err.message}`);

@@ -7,6 +7,7 @@ import { ChartControls } from '../modules/chart/components/ChartControls';
 import { OrderPanel } from '../modules/trading/components/OrderPanel';
 import { OrderHistory } from '../modules/trading/components/OrderHistory';
 import { AccountInfo } from '../modules/account/components/AccountInfo';
+import { AccountSelector } from '../components/AccountSelector';
 import { useChart } from '../modules/chart/hooks/useChart';
 
 export const DashboardPage = () => {
@@ -15,6 +16,11 @@ export const DashboardPage = () => {
   return (
     <PageLayout title="트레이딩" description="실시간 차트와 주문 관리">
       <div className="dashboard-layout">
+        {/* 계좌 선택 */}
+        <div className="dashboard-header">
+          <AccountSelector />
+        </div>
+        
         {/* 계좌 정보 */}
         <div className="account-section">
           <AccountInfo />

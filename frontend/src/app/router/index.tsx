@@ -6,7 +6,7 @@ import { LoginPage } from '../../pages/LoginPage';
 import { DashboardPage } from '../../pages/DashboardPage';
 import { BacktestPage } from '../../pages/BacktestPage';
 import { StrategyBuilderPage } from '../../pages/StrategyBuilderPage';
-import AccountsPage from '../../pages/AccountsPage';
+import SettingsPage from '../../pages/SettingsPage';
 
 // 인증 체크
 const isAuthenticated = () => {
@@ -55,10 +55,10 @@ export const router = createBrowserRouter([
     ),
   },
   {
-    path: '/accounts',
+    path: '/settings',
     element: (
       <ProtectedRoute>
-        <AccountsPage />
+        <SettingsPage />
       </ProtectedRoute>
     ),
   },

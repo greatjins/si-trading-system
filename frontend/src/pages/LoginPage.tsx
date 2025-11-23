@@ -40,7 +40,7 @@ export const LoginPage = () => {
   return (
     <div className="login-page">
       <div className="login-container">
-        <h1>LS HTS 플랫폼</h1>
+        <h1>HTS</h1>
         <p className="subtitle">국내주식 자동매매 시스템</p>
         
         <form onSubmit={handleSubmit} className="login-form">
