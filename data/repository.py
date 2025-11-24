@@ -16,6 +16,31 @@ from utils.config import config
 logger = setup_logger(__name__)
 
 
+def get_db_session() -> Session:
+    """
+    데이터베이스 세션 생성 (헬퍼 함수)
+    
+    Returns:
+        SQLAlchemy Session
+    """
+    db_type = config.get("database.type", "sqlite")
+    if db_type == "sqlite":
+        db_path = config.get("database.path", "data/hts.db")
+        db_url = f"sqlite:///{db_path}"
+    else:
+        # PostgreSQL
+        host = config.get("database.host", "localhost")
+        port = config.get("database.port", 5432)
+        database = config.get("database.database", "hts")
+        username = config.get("database.user", "hts_user")
+        password = config.get("database.password", "")
+        db_url = f"postgresql+pg8000://{username}:{password}@{host}:{port}/{database}"
+    
+    engine = create_engine(db_url, echo=False)
+    SessionLocal = sessionmaker(bind=engine)
+    return SessionLocal()
+
+
 class DataRepository:
     """데이터 조회 Repository"""
     

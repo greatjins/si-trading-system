@@ -574,9 +574,10 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
 자동 생성된 전략 - 전략 빌더
 """
 from typing import List
+import pandas as pd
 from core.strategy.base import BaseStrategy
 from core.strategy.registry import strategy
-from utils.types import OHLC, Position, Account, OrderSignal, OrderSide, OrderType, Order
+from utils.types import Position, Account, OrderSignal, OrderSide, OrderType, Order
 
 @strategy(
     name="{class_name}",
@@ -730,16 +731,29 @@ class {class_name}(BaseStrategy):
         self.highest_price = {{}}  # symbol: highest_price
         self.trailing_stop_price = {{}}  # symbol: stop_price
     
-    def on_bar(self, bars: List[OHLC], positions: List[Position], account: Account) -> List[OrderSignal]:
-        """새로운 바마다 호출"""
+    def on_bar(self, bars: pd.DataFrame, positions: List[Position], account: Account) -> List[OrderSignal]:
+        """
+        새로운 바마다 호출
+        
+        Args:
+            bars: OHLCV DataFrame (timestamp 인덱스, ['open', 'high', 'low', 'close', 'volume', 'value'] 컬럼)
+            positions: 현재 포지션 리스트
+            account: 계좌 정보
+        
+        Returns:
+            주문 신호 리스트
+        """
         signals: List[OrderSignal] = []
         
         if len(bars) < 50:  # 최소 데이터 필요
             return signals
         
-        closes = [bar.close for bar in bars]
-        current_price = bars[-1].close
-        symbol = bars[-1].symbol
+        # DataFrame에서 데이터 추출
+        closes = bars['close'].values
+        current_price = bars['close'].iloc[-1]
+        
+        # 종목 코드는 파라미터에서 가져오거나 기본값 사용
+        symbol = self.get_param("symbol", "005930")
         position = self.get_position(symbol, positions)
         
         # 매수 조건 체크
@@ -847,16 +861,16 @@ class {class_name}(BaseStrategy):
                     if self.trailing_method == "atr":
                         # ATR 계산
                         if len(bars) >= self.atr_period + 1:
-                            highs = [bar.high for bar in bars]
-                            lows = [bar.low for bar in bars]
-                            closes = [bar.close for bar in bars]
+                            highs = bars['high'].values
+                            lows = bars['low'].values
+                            closes_arr = bars['close'].values
                             
                             true_ranges = []
-                            for i in range(1, len(closes)):
+                            for i in range(1, len(closes_arr)):
                                 tr = max(
                                     highs[i] - lows[i],
-                                    abs(highs[i] - closes[i-1]),
-                                    abs(lows[i] - closes[i-1])
+                                    abs(highs[i] - closes_arr[i-1]),
+                                    abs(lows[i] - closes_arr[i-1])
                                 )
                                 true_ranges.append(tr)
                             
@@ -921,14 +935,14 @@ class {class_name}(BaseStrategy):
         """주문 체결 시 호출"""
         pass
     
-    def _calculate_quantity(self, equity: float, price: float, bars: List[OHLC] = None) -> int:
+    def _calculate_quantity(self, equity: float, price: float, bars: pd.DataFrame = None) -> int:
         """
         매수 수량 계산 - 포지션 사이징 방식에 따라 동적 계산
         
         Args:
             equity: 계좌 자산
             price: 현재 가격
-            bars: OHLC 데이터 (ATR/변동성 계산용)
+            bars: OHLCV DataFrame (ATR/변동성 계산용)
         
         Returns:
             매수 수량
@@ -940,18 +954,18 @@ class {class_name}(BaseStrategy):
             
         elif self.sizing_method == "atr_risk":
             # ATR 기반 리스크 관리
-            if bars and len(bars) >= self.atr_period + 1:
-                highs = [bar.high for bar in bars]
-                lows = [bar.low for bar in bars]
-                closes = [bar.close for bar in bars]
+            if bars is not None and len(bars) >= self.atr_period + 1:
+                highs = bars['high'].values
+                lows = bars['low'].values
+                closes_arr = bars['close'].values
                 
                 # ATR 계산 (간단 버전)
                 true_ranges = []
-                for i in range(1, len(closes)):
+                for i in range(1, len(closes_arr)):
                     tr = max(
                         highs[i] - lows[i],
-                        abs(highs[i] - closes[i-1]),
-                        abs(lows[i] - closes[i-1])
+                        abs(highs[i] - closes_arr[i-1]),
+                        abs(lows[i] - closes_arr[i-1])
                     )
                     true_ranges.append(tr)
                 
@@ -984,9 +998,9 @@ class {class_name}(BaseStrategy):
             
         elif self.sizing_method == "volatility":
             # 변동성 기반
-            if bars and len(bars) >= self.volatility_period:
-                closes = [bar.close for bar in bars[-self.volatility_period:]]
-                returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+            if bars is not None and len(bars) >= self.volatility_period:
+                closes_arr = bars['close'].iloc[-self.volatility_period:].values
+                returns = [(closes_arr[i] - closes_arr[i-1]) / closes_arr[i-1] for i in range(1, len(closes_arr))]
                 volatility = (sum([r**2 for r in returns]) / len(returns)) ** 0.5
                 
                 if volatility > 0:

@@ -54,19 +54,16 @@ async def run_backtest(request: BacktestRequest):
         except ValueError:
             # 전략 빌더 전략 시도
             from data.models import StrategyBuilderModel
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
+            from data.repository import get_db_session
             
             # DB 세션 생성
-            engine = create_engine("sqlite:///data/hts.db")
-            SessionLocal = sessionmaker(bind=engine)
-            db = SessionLocal()
+            db = get_db_session()
             
             try:
                 # 전략 빌더에서 전략 찾기
                 builder_strategy = db.query(StrategyBuilderModel).filter(
                     StrategyBuilderModel.name == request.strategy_name,
-                    StrategyBuilderModel.is_active == 1
+                    StrategyBuilderModel.is_active == True
                 ).first()
                 
                 if not builder_strategy:
