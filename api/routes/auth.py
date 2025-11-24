@@ -231,10 +231,50 @@ async def logout(current_user: dict = Depends(get_current_active_user)):
     Returns:
         로그아웃 결과
     """
-    # TODO: 토큰 블랙리스트 처리 (Redis)
-    logger.info(f"User logged out: {current_user['username']}")
+    try:
+        from broker.connection_pool import connection_pool
+        from api.dependencies import get_db
+        from api.repositories.account_repository import AccountRepository
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        
+        # DB 세션 생성
+        engine = create_engine("sqlite:///data/hts.db")
+        SessionLocal = sessionmaker(bind=engine)
+        db = SessionLocal()
+        
+        try:
+            # 사용자의 모든 계좌 조회
+            repo = AccountRepository(db)
+            accounts = repo.get_accounts(current_user["user_id"])
+            
+            # 각 계좌의 연결 종료
+            for account in accounts:
+                try:
+                    credentials = repo.get_account_credentials(account.id, current_user["user_id"])
+                    if credentials and credentials["account_number"]:
+                        await connection_pool.close_adapter(
+                            broker=account.broker.value,
+                            account_id=credentials["account_number"]
+                        )
+                        logger.info(f"Closed connection for account: {credentials['account_number']}")
+                except Exception as e:
+                    logger.warning(f"Failed to close connection for account {account.id}: {e}")
+        finally:
+            db.close()
+        
+        # TODO: 토큰 블랙리스트 처리 (Redis)
+        logger.info(f"User logged out: {current_user['username']}")
+        
+        return MessageResponse(
+            message="Successfully logged out",
+            success=True
+        )
     
-    return MessageResponse(
-        message="Successfully logged out",
-        success=True
-    )
+    except Exception as e:
+        logger.error(f"Error during logout: {e}")
+        # 로그아웃은 실패해도 성공으로 처리
+        return MessageResponse(
+            message="Successfully logged out",
+            success=True
+        )

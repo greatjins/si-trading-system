@@ -34,8 +34,8 @@ class TradingAccount(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, nullable=False, index=True)  # 사용자 ID
     name = Column(String, nullable=False)  # 계좌 이름 (예: "LS증권 모의투자")
-    broker = Column(SQLEnum(BrokerType), nullable=False)  # 증권사
-    account_type = Column(SQLEnum(AccountType), nullable=False)  # 계좌 타입
+    broker = Column(String(20), nullable=False)  # 증권사
+    account_type = Column(String(20), nullable=False)  # 계좌 타입
     account_number = Column(String, nullable=False)  # 계좌번호
     
     # API 인증 정보 (암호화 저장 필요)

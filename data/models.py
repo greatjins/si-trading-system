@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -63,9 +63,27 @@ class StrategyConfigModel(Base):
     strategy_class = Column(String(100), nullable=False)
     parameters = Column(JSON, nullable=False)
     description = Column(Text, nullable=True)
-    is_active = Column(Integer, default=1)  # 0: 비활성, 1: 활성
+    is_active = Column(Boolean, default=True)  # PostgreSQL 호환
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     
     def __repr__(self) -> str:
         return f"<StrategyConfig(id={self.id}, name={self.name}, active={bool(self.is_active)})>"
+
+
+class StrategyBuilderModel(Base):
+    """전략 빌더 테이블 (노코드 전략)"""
+    __tablename__ = "strategy_builder"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    config = Column(JSON, nullable=False)  # 전략 빌더 설정 (JSON)
+    python_code = Column(Text, nullable=True)  # 생성된 Python 코드
+    is_active = Column(Boolean, default=True)  # PostgreSQL 호환
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    def __repr__(self) -> str:
+        return f"<StrategyBuilder(id={self.id}, name={self.name}, user_id={self.user_id})>"

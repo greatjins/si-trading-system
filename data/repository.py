@@ -90,10 +90,10 @@ class BacktestRepository:
                 # PostgreSQL
                 host = config.get("database.host", "localhost")
                 port = config.get("database.port", 5432)
-                database = config.get("database.database", "hts_platform")
-                username = config.get("database.username", "")
+                database = config.get("database.database", "hts")
+                username = config.get("database.user", "hts_user")
                 password = config.get("database.password", "")
-                db_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
+                db_url = f"postgresql+pg8000://{username}:{password}@{host}:{port}/{database}"
         
         self.engine = create_engine(db_url, echo=False)
         self.SessionLocal = sessionmaker(bind=self.engine)

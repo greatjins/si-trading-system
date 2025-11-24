@@ -13,11 +13,14 @@ class AccountRepository:
     
     def __init__(self, db: Session):
         self.db = db
-        # 암호화 키 (환경변수에서 가져오거나 생성)
+        # 암호화 키 (환경변수에서 가져오거나 고정 키 사용)
         encryption_key = os.getenv("ENCRYPTION_KEY")
         if not encryption_key:
-            # 개발용 기본 키 (프로덕션에서는 반드시 환경변수 사용!)
-            encryption_key = Fernet.generate_key()
+            # 개발용 고정 키 (프로덕션에서는 반드시 환경변수 사용!)
+            # 주의: 이 키는 개발 환경에서만 사용하세요
+            encryption_key = b'ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg='
+        elif isinstance(encryption_key, str):
+            encryption_key = encryption_key.encode()
         self.cipher = Fernet(encryption_key)
     
     def _encrypt(self, value: Optional[str]) -> Optional[str]:
@@ -160,8 +163,8 @@ class AccountRepository:
             "id": account.id,
             "user_id": account.user_id,
             "name": account.name,
-            "broker": account.broker.value,
-            "account_type": account.account_type.value,
+            "broker": account.broker,
+            "account_type": account.account_type,
             "account_number_masked": self._mask_string(self._decrypt(account.account_number)),
             "api_key_masked": self._mask_string(self._decrypt(account.api_key)),
             "has_api_secret": bool(account.api_secret),

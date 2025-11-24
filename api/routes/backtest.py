@@ -46,11 +46,88 @@ async def run_backtest(request: BacktestRequest):
         
         logger.info(f"Loaded {len(data)} bars for {request.symbol}")
         
-        # 전략 로드
-        strategy_class = StrategyRegistry.get(request.strategy_name)
-        
-        # 전략 인스턴스 생성 (params 딕셔너리 전달)
-        strategy = strategy_class(params=request.parameters or {})
+        # 전략 로드 (코드 기반 또는 전략 빌더)
+        try:
+            # 먼저 코드 기반 전략 시도
+            strategy_class = StrategyRegistry.get(request.strategy_name)
+            strategy = strategy_class(params=request.parameters or {})
+        except ValueError:
+            # 전략 빌더 전략 시도
+            from data.models import StrategyBuilderModel
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            
+            # DB 세션 생성
+            engine = create_engine("sqlite:///data/hts.db")
+            SessionLocal = sessionmaker(bind=engine)
+            db = SessionLocal()
+            
+            try:
+                # 전략 빌더에서 전략 찾기
+                builder_strategy = db.query(StrategyBuilderModel).filter(
+                    StrategyBuilderModel.name == request.strategy_name,
+                    StrategyBuilderModel.is_active == 1
+                ).first()
+                
+                if not builder_strategy:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Strategy '{request.strategy_name}' not found in registry or strategy builder"
+                    )
+            finally:
+                db.close()
+            
+            # Python 코드 실행하여 전략 클래스 생성
+            python_code = builder_strategy.python_code
+            
+            # 디버깅: 생성된 코드 저장
+            import os
+            debug_file = f"data/debug_strategy_{builder_strategy.id}.py"
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write(python_code)
+            logger.info(f"Generated code saved to: {debug_file}")
+            
+            # 전략 클래스 동적 로드
+            import sys
+            from types import ModuleType
+            
+            # 임시 모듈 생성
+            temp_module = ModuleType("temp_strategy")
+            temp_module.__dict__.update({
+                "BaseStrategy": __import__("core.strategy.base", fromlist=["BaseStrategy"]).BaseStrategy,
+                "strategy": __import__("core.strategy.registry", fromlist=["strategy"]).strategy,
+                "OHLC": __import__("utils.types", fromlist=["OHLC"]).OHLC,
+                "Position": __import__("utils.types", fromlist=["Position"]).Position,
+                "Account": __import__("utils.types", fromlist=["Account"]).Account,
+                "OrderSignal": __import__("utils.types", fromlist=["OrderSignal"]).OrderSignal,
+                "OrderSide": __import__("utils.types", fromlist=["OrderSide"]).OrderSide,
+                "OrderType": __import__("utils.types", fromlist=["OrderType"]).OrderType,
+                "Order": __import__("utils.types", fromlist=["Order"]).Order,
+                "List": List,
+            })
+            
+            # 코드 실행
+            try:
+                exec(python_code, temp_module.__dict__)
+            except SyntaxError as e:
+                logger.error(f"Syntax error in generated code: {e}")
+                logger.error(f"Full code:\n{python_code}")
+                raise
+            
+            # 전략 클래스 찾기
+            strategy_class = None
+            for name, obj in temp_module.__dict__.items():
+                if isinstance(obj, type) and hasattr(obj, "on_bar") and name != "BaseStrategy":
+                    strategy_class = obj
+                    break
+            
+            if not strategy_class:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to load strategy class from generated code"
+                )
+            
+            strategy = strategy_class(params=request.parameters or {})
         
         logger.info(f"Running backtest: {request.strategy_name} on {request.symbol}")
         

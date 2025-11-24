@@ -5,8 +5,10 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from api.auth.security import get_current_active_user
+from api.dependencies import get_db
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -152,15 +154,11 @@ class StrategyBuilderResponse(BaseModel):
     python_code: str = None
 
 
-# 임시 저장소 (실제로는 DB 사용)
-strategies_db: Dict[int, Dict[str, Any]] = {}
-strategy_counter = 0
-
-
 @router.post("/save", response_model=StrategyBuilderResponse)
 async def save_strategy(
     request: StrategyBuilderRequest,
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """
     전략 저장
@@ -168,41 +166,44 @@ async def save_strategy(
     Args:
         request: 전략 빌더 요청
         current_user: 현재 사용자
+        db: DB 세션
         
     Returns:
         저장된 전략 정보
     """
-    global strategy_counter
-    
     try:
-        strategy_counter += 1
-        strategy_id = strategy_counter
+        from data.models import StrategyBuilderModel
+        from sqlalchemy.orm import Session
         
         # Python 코드 생성
         python_code = generate_strategy_code(request)
         
-        # 저장
-        strategies_db[strategy_id] = {
-            "id": strategy_id,
-            "name": request.name,
-            "description": request.description,
-            "user_id": current_user["user_id"],
-            "config": request.dict(),
-            "python_code": python_code,
-            "created_at": datetime.now(),
-        }
-        
-        logger.info(f"Strategy saved: ID={strategy_id}, Name={request.name}, User={current_user['username']}")
-        
-        return StrategyBuilderResponse(
-            strategy_id=strategy_id,
+        # DB에 저장
+        strategy = StrategyBuilderModel(
+            user_id=current_user["user_id"],
             name=request.name,
             description=request.description,
-            created_at=datetime.now(),
+            config=request.dict(),
+            python_code=python_code,
+            is_active=True
+        )
+        
+        db.add(strategy)
+        db.commit()
+        db.refresh(strategy)
+        
+        logger.info(f"Strategy saved: ID={strategy.id}, Name={request.name}, User={current_user['username']}")
+        
+        return StrategyBuilderResponse(
+            strategy_id=strategy.id,
+            name=request.name,
+            description=request.description,
+            created_at=strategy.created_at,
             python_code=python_code,
         )
     
     except Exception as e:
+        db.rollback()
         logger.error(f"Failed to save strategy: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -377,29 +378,37 @@ async def get_available_indicators():
 
 
 @router.get("/list")
-async def list_strategies(current_user: dict = Depends(get_current_active_user)):
+async def list_strategies(
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
     """
     사용자의 전략 목록 조회
     
     Args:
         current_user: 현재 사용자
+        db: DB 세션
         
     Returns:
         전략 목록
     """
     try:
-        user_strategies = [
-            {
-                "strategy_id": s["id"],
-                "name": s["name"],
-                "description": s["description"],
-                "created_at": s["created_at"],
-            }
-            for s in strategies_db.values()
-            if s["user_id"] == current_user["user_id"]
-        ]
+        from data.models import StrategyBuilderModel
         
-        return user_strategies
+        strategies = db.query(StrategyBuilderModel).filter(
+            StrategyBuilderModel.user_id == current_user["user_id"],
+            StrategyBuilderModel.is_active == True
+        ).order_by(StrategyBuilderModel.created_at.desc()).all()
+        
+        return [
+            {
+                "strategy_id": s.id,
+                "name": s.name,
+                "description": s.description,
+                "created_at": s.created_at,
+            }
+            for s in strategies
+        ]
     
     except Exception as e:
         logger.error(f"Failed to list strategies: {e}")
@@ -409,7 +418,8 @@ async def list_strategies(current_user: dict = Depends(get_current_active_user))
 @router.get("/{strategy_id}")
 async def get_strategy(
     strategy_id: int,
-    current_user: dict = Depends(get_current_active_user)
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """
     전략 상세 조회
@@ -417,26 +427,79 @@ async def get_strategy(
     Args:
         strategy_id: 전략 ID
         current_user: 현재 사용자
+        db: DB 세션
         
     Returns:
         전략 상세 정보
     """
     try:
-        if strategy_id not in strategies_db:
+        from data.models import StrategyBuilderModel
+        
+        strategy = db.query(StrategyBuilderModel).filter(
+            StrategyBuilderModel.id == strategy_id,
+            StrategyBuilderModel.user_id == current_user["user_id"]
+        ).first()
+        
+        if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
         
-        strategy = strategies_db[strategy_id]
-        
-        # 권한 확인
-        if strategy["user_id"] != current_user["user_id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
-        
-        return strategy
+        return {
+            "id": strategy.id,
+            "name": strategy.name,
+            "description": strategy.description,
+            "user_id": strategy.user_id,
+            "config": strategy.config,
+            "python_code": strategy.python_code,
+            "created_at": strategy.created_at,
+        }
     
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{strategy_id}")
+async def delete_strategy(
+    strategy_id: int,
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    전략 삭제
+    
+    Args:
+        strategy_id: 전략 ID
+        current_user: 현재 사용자
+        db: DB 세션
+        
+    Returns:
+        삭제 결과
+    """
+    try:
+        from data.models import StrategyBuilderModel
+        
+        strategy = db.query(StrategyBuilderModel).filter(
+            StrategyBuilderModel.id == strategy_id,
+            StrategyBuilderModel.user_id == current_user["user_id"]
+        ).first()
+        
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        
+        db.delete(strategy)
+        db.commit()
+        
+        logger.info(f"Strategy deleted: ID={strategy_id}, User={current_user['username']}")
+        
+        return {"success": True, "message": "Strategy deleted successfully"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -450,7 +513,36 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
     Returns:
         Python 코드
     """
-    class_name = request.name.replace(" ", "").replace("-", "")
+    import re
+    
+    # 클래스명: 영문자, 숫자, 언더스코어만 허용
+    class_name = re.sub(r'[^a-zA-Z0-9_]', '', request.name.replace(" ", "_").replace("-", "_"))
+    if not class_name:
+        class_name = "CustomStrategy"
+    # 숫자로 시작하면 안됨
+    if class_name[0].isdigit():
+        class_name = "Strategy_" + class_name
+    
+    # 설명에서 따옴표 이스케이프
+    description = request.description.replace('"', '\\"').replace("'", "\\'") if request.description else ""
+    
+    # stop_loss와 take_profit을 딕셔너리로 변환
+    stop_loss_dict = {}
+    if request.positionManagement.stopLoss:
+        stop_loss_dict = request.positionManagement.stopLoss.dict(exclude_none=True)
+    
+    take_profit_dict = {}
+    if request.positionManagement.takeProfit:
+        take_profit_dict = request.positionManagement.takeProfit.dict(exclude_none=True)
+    
+    trailing_stop_dict = {}
+    if request.positionManagement.trailingStop:
+        trailing_stop_dict = request.positionManagement.trailingStop.dict(exclude_none=True)
+    
+    # Python 코드용 딕셔너리 문자열 생성 (repr 사용)
+    stop_loss_str = repr(stop_loss_dict)
+    take_profit_str = repr(take_profit_dict)
+    trailing_stop_str = repr(trailing_stop_dict)
     
     # 매수 조건 코드 생성
     buy_conditions_code = []
@@ -477,7 +569,7 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
     code = f'''"""
 {request.name}
 
-{request.description}
+{description}
 
 자동 생성된 전략 - 전략 빌더
 """
@@ -488,7 +580,7 @@ from utils.types import OHLC, Position, Account, OrderSignal, OrderSide, OrderTy
 
 @strategy(
     name="{class_name}",
-    description="{request.description}",
+    description="""{description}""",
     author="Strategy Builder",
     version="1.0.0",
     parameters={{
@@ -563,44 +655,19 @@ from utils.types import OHLC, Position, Account, OrderSignal, OrderSide, OrderTy
             "description": "최대 보유 종목 수"
         }},
         "stop_loss": {{
-            "type": "float",
-            "default": {request.positionManagement.stopLoss or 0},
-            "description": "손절 비율"
+            "type": "dict",
+            "default": {stop_loss_str},
+            "description": "손절 설정"
         }},
         "take_profit": {{
-            "type": "float",
-            "default": {request.positionManagement.takeProfit or 0},
-            "description": "익절 비율"
+            "type": "dict",
+            "default": {take_profit_str},
+            "description": "익절 설정"
         }},
-        "trailing_stop_enabled": {{
-            "type": "bool",
-            "default": {str(request.positionManagement.trailingStop.enabled).lower() if request.positionManagement.trailingStop else 'false'},
-            "description": "트레일링 스탑 활성화"
-        }},
-        "trailing_method": {{
-            "type": "str",
-            "default": "{request.positionManagement.trailingStop.method if request.positionManagement.trailingStop else 'atr'}",
-            "description": "트레일링 방식"
-        }},
-        "trailing_atr_multiple": {{
-            "type": "float",
-            "default": {request.positionManagement.trailingStop.atrMultiple if request.positionManagement.trailingStop and request.positionManagement.trailingStop.atrMultiple else 3.0},
-            "description": "트레일링 ATR 배수"
-        }},
-        "trailing_percentage": {{
-            "type": "float",
-            "default": {request.positionManagement.trailingStop.percentage if request.positionManagement.trailingStop and request.positionManagement.trailingStop.percentage else 5.0},
-            "description": "트레일링 고정 %"
-        }},
-        "trailing_activation": {{
-            "type": "float",
-            "default": {request.positionManagement.trailingStop.activationProfit if request.positionManagement.trailingStop and request.positionManagement.trailingStop.activationProfit else 5.0},
-            "description": "트레일링 활성화 수익률"
-        }},
-        "trailing_update_freq": {{
-            "type": "str",
-            "default": "{request.positionManagement.trailingStop.updateFrequency if request.positionManagement.trailingStop else 'every_bar'}",
-            "description": "트레일링 업데이트 주기"
+        "trailing_stop": {{
+            "type": "dict",
+            "default": {trailing_stop_str},
+            "description": "트레일링 스탑 설정"
         }}
     }}
 )
@@ -616,7 +683,7 @@ class {class_name}(BaseStrategy):
         super().__init__(params)
         # 진입 전략
         self.entry_type = self.get_param("entry_type", "{request.entryStrategy.type}")
-        self.pyramid_levels = {request.entryStrategy.pyramidLevels if request.entryStrategy.pyramidLevels else []}
+        self.pyramid_levels = {[level.dict() for level in request.entryStrategy.pyramidLevels] if request.entryStrategy.pyramidLevels else []}
         self.max_position_size = self.get_param("max_position_size", {request.entryStrategy.maxPositionSize or 40})
         self.min_interval = self.get_param("min_interval", {request.entryStrategy.minInterval or 1})
         
@@ -638,16 +705,26 @@ class {class_name}(BaseStrategy):
         self.volatility_period = self.get_param("volatility_period", {request.positionManagement.volatilityPeriod or 20})
         self.volatility_target = self.get_param("volatility_target", {request.positionManagement.volatilityTarget or 2.0})
         self.max_positions = self.get_param("max_positions", {request.positionManagement.maxPositions})
-        self.stop_loss = self.get_param("stop_loss", {request.positionManagement.stopLoss or 0})
-        self.take_profit = self.get_param("take_profit", {request.positionManagement.takeProfit or 0})
+        
+        # 손절/익절 설정
+        stop_loss_config = self.get_param("stop_loss", {stop_loss_str})
+        self.stop_loss_enabled = stop_loss_config.get("enabled", False) if isinstance(stop_loss_config, dict) else False
+        self.stop_loss_method = stop_loss_config.get("method", "fixed") if isinstance(stop_loss_config, dict) else "fixed"
+        self.stop_loss_percent = stop_loss_config.get("fixedPercent", 5.0) if isinstance(stop_loss_config, dict) else 5.0
+        
+        take_profit_config = self.get_param("take_profit", {take_profit_str})
+        self.take_profit_enabled = take_profit_config.get("enabled", False) if isinstance(take_profit_config, dict) else False
+        self.take_profit_method = take_profit_config.get("method", "fixed") if isinstance(take_profit_config, dict) else "fixed"
+        self.take_profit_percent = take_profit_config.get("fixedPercent", 10.0) if isinstance(take_profit_config, dict) else 10.0
         
         # 트레일링 스탑
-        self.trailing_stop_enabled = {str(request.positionManagement.trailingStop.enabled).lower() if request.positionManagement.trailingStop else 'false'}
-        self.trailing_method = "{request.positionManagement.trailingStop.method if request.positionManagement.trailingStop else 'atr'}"
-        self.trailing_atr_multiple = {request.positionManagement.trailingStop.atrMultiple if request.positionManagement.trailingStop and request.positionManagement.trailingStop.atrMultiple else 3.0}
-        self.trailing_percentage = {request.positionManagement.trailingStop.percentage if request.positionManagement.trailingStop and request.positionManagement.trailingStop.percentage else 5.0}
-        self.trailing_activation = {request.positionManagement.trailingStop.activationProfit if request.positionManagement.trailingStop and request.positionManagement.trailingStop.activationProfit else 5.0}
-        self.trailing_update_freq = "{request.positionManagement.trailingStop.updateFrequency if request.positionManagement.trailingStop else 'every_bar'}"
+        trailing_config = self.get_param("trailing_stop", {trailing_stop_str})
+        self.trailing_stop_enabled = trailing_config.get("enabled", False) if isinstance(trailing_config, dict) else False
+        self.trailing_method = trailing_config.get("method", "atr") if isinstance(trailing_config, dict) else "atr"
+        self.trailing_atr_multiple = trailing_config.get("atrMultiple", 3.0) if isinstance(trailing_config, dict) else 3.0
+        self.trailing_percentage = trailing_config.get("percentage", 5.0) if isinstance(trailing_config, dict) else 5.0
+        self.trailing_activation = trailing_config.get("activationProfit", 5.0) if isinstance(trailing_config, dict) else 5.0
+        self.trailing_update_freq = trailing_config.get("updateFrequency", "every_bar") if isinstance(trailing_config, dict) else "every_bar"
         
         # 트레일링 스탑 상태 추적
         self.highest_price = {{}}  # symbol: highest_price
@@ -683,7 +760,8 @@ class {class_name}(BaseStrategy):
         
         elif self.entry_type == "pyramid":
             # 피라미딩 진입
-            current_date = bars[-1].timestamp if hasattr(bars[-1], 'timestamp') else len(bars)
+            # 날짜를 바 인덱스로 사용 (간단하고 안정적)
+            current_bar_index = len(bars) - 1
             
             # 1차 진입 (초기 진입)
             if symbol not in self.entry_price:
@@ -698,7 +776,7 @@ class {class_name}(BaseStrategy):
                     if quantity > 0:
                         self.entry_price[symbol] = current_price
                         self.current_level[symbol] = 1
-                        self.last_entry_date[symbol] = current_date
+                        self.last_entry_date[symbol] = current_bar_index
                         self.total_units[symbol] = first_level.get("units", 1.0)
                         
                         signals.append(OrderSignal(
@@ -714,9 +792,9 @@ class {class_name}(BaseStrategy):
                 
                 # 최대 레벨 체크
                 if current_level_num < len(self.pyramid_levels):
-                    # 최소 간격 체크
-                    last_date = self.last_entry_date.get(symbol, 0)
-                    if current_date - last_date >= self.min_interval:
+                    # 최소 간격 체크 (바 인덱스 기준)
+                    last_bar_index = self.last_entry_date.get(symbol, 0)
+                    if current_bar_index - last_bar_index >= self.min_interval:
                         # 가격 변화율 계산
                         price_change_pct = ((current_price - self.entry_price[symbol]) / self.entry_price[symbol]) * 100
                         
@@ -735,7 +813,7 @@ class {class_name}(BaseStrategy):
                                 
                                 if quantity > 0:
                                     self.current_level[symbol] = current_level_num + 1
-                                    self.last_entry_date[symbol] = current_date
+                                    self.last_entry_date[symbol] = current_bar_index
                                     self.total_units[symbol] = total_units + next_units
                                     
                                     signals.append(OrderSignal(
@@ -803,14 +881,14 @@ class {class_name}(BaseStrategy):
                         should_sell = True
             
             # 기본 손절/익절 체크
-            if not should_sell and self.stop_loss > 0:
+            if not should_sell and self.stop_loss_enabled:
                 pnl_pct = (current_price - position.avg_price) / position.avg_price
-                if pnl_pct <= -self.stop_loss / 100:
+                if pnl_pct <= -(self.stop_loss_percent / 100):
                     should_sell = True
             
-            if not should_sell and self.take_profit > 0:
+            if not should_sell and self.take_profit_enabled:
                 pnl_pct = (current_price - position.avg_price) / position.avg_price
-                if pnl_pct >= self.take_profit / 100:
+                if pnl_pct >= (self.take_profit_percent / 100):
                     should_sell = True
             
 {chr(10).join(sell_conditions_code) if sell_conditions_code else "            pass"}

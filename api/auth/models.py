@@ -44,12 +44,26 @@ class APIKey(Base):
 class UserRepository:
     """사용자 저장소"""
     
-    def __init__(self, db_path: str = "data/hts.db"):
+    def __init__(self, db_url: str = None):
         """
         Args:
-            db_path: 데이터베이스 경로
+            db_url: 데이터베이스 URL (None이면 config에서 가져옴)
         """
-        self.engine = create_engine(f"sqlite:///{db_path}")
+        if db_url is None:
+            from utils.config import config
+            db_config = config.get("database", {})
+            db_type = db_config.get("type", "sqlite")
+            
+            if db_type == "postgresql":
+                db_url = (
+                    f"postgresql+pg8000://{db_config['user']}:{db_config['password']}"
+                    f"@{db_config['host']}:{db_config['port']}/{db_config['database']}"
+                )
+            else:
+                db_path = db_config.get("path", "data/hts.db")
+                db_url = f"sqlite:///{db_path}"
+        
+        self.engine = create_engine(db_url)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
     

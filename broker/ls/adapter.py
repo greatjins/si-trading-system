@@ -6,9 +6,6 @@ from datetime import datetime
 
 from broker.base import BrokerBase
 from broker.ls.client import LSClient
-from broker.ls.ohlc import LSOHLCService
-from broker.ls.order import LSOrderService
-from broker.ls.account import LSAccountService
 from broker.ls.realtime import LSRealtimeService
 from utils.types import OHLC, Order, Position, Account
 from utils.logger import setup_logger
@@ -97,15 +94,17 @@ class LSAdapter(BrokerBase):
         logger.info(f"Getting OHLC: {symbol}, {interval}")
         
         if interval == "1d":
-            ls_ohlc_list = await self.market_service.get_ohlc_daily(symbol, start_date, end_date)
+            ohlc_list = await self.market_service.get_daily_ohlc(symbol, start_date, end_date)
         elif interval.endswith("m"):
             minutes = int(interval[:-1])
-            ls_ohlc_list = await self.market_service.get_ohlc_minute(symbol, minutes, start_date, end_date)
+            # 분봉은 개수 기반 조회이므로 적절한 개수 계산
+            days_diff = (end_date - start_date).days
+            count = min(days_diff * 390 // minutes, 500)  # 하루 390분 (9:00-15:30)
+            ohlc_list = await self.market_service.get_minute_ohlc(symbol, minutes, count)
         else:
             raise ValueError(f"Unsupported interval: {interval}")
         
-        # LS 타입을 공통 타입으로 변환
-        return [self.market_service.to_ohlc(ls_ohlc) for ls_ohlc in ls_ohlc_list]
+        return ohlc_list
     
     async def get_account(self) -> Account:
         """
@@ -280,7 +279,8 @@ class LSAdapter(BrokerBase):
             계좌 정보
         """
         logger.info("Getting account info")
-        return await self.account_service.get_account_balance()
+        ls_account = await self.account_service.get_account_balance(self.account_id)
+        return self.account_service.to_account(ls_account)
     
     async def get_positions(self) -> List[Position]:
         """
@@ -290,7 +290,8 @@ class LSAdapter(BrokerBase):
             포지션 리스트
         """
         logger.info("Getting positions")
-        return await self.account_service.get_positions()
+        ls_positions = await self.account_service.get_positions(self.account_id)
+        return [self.account_service.to_position(pos) for pos in ls_positions]
     
     async def get_open_orders(self) -> List[Order]:
         """
