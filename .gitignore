@@ -35,6 +35,7 @@ config.yaml
 # OS
 .DS_Store
 Thumbs.db
+*.appx
 
 # Database
 *.db
@@ -43,6 +44,10 @@ Thumbs.db
 data/*.db
 data/ls_token.json
 data/ls_token_test.json
+data/postgres/
+data/redis/
+*.backup_*
+data/debug_*.py
 
 # Logs
 *.log

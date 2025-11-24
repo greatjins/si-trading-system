@@ -151,6 +151,47 @@ interface Strategy {
 }
 
 export const StrategyBuilderPage = () => {
+  const [editingStrategyId, setEditingStrategyId] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // URL 파라미터에서 edit ID 가져오기
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const editId = params.get('edit');
+    
+    if (editId) {
+      setEditingStrategyId(Number(editId));
+      loadStrategy(Number(editId));
+    }
+  }, []);
+  
+  // 전략 로드
+  const loadStrategy = async (strategyId: number) => {
+    setIsLoading(true);
+    try {
+      const response = await httpClient.get(`/api/strategy-builder/${strategyId}`);
+      const loadedStrategy = response.data;
+      
+      // config에서 전략 설정 복원
+      if (loadedStrategy.config) {
+        setStrategy({
+          name: loadedStrategy.config.name,
+          description: loadedStrategy.config.description,
+          stockSelection: loadedStrategy.config.stockSelection,
+          buyConditions: loadedStrategy.config.buyConditions,
+          sellConditions: loadedStrategy.config.sellConditions,
+          entryStrategy: loadedStrategy.config.entryStrategy,
+          positionManagement: loadedStrategy.config.positionManagement,
+        });
+      }
+    } catch (error) {
+      console.error('전략 로드 실패:', error);
+      alert('전략을 불러올 수 없습니다');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
   const [strategy, setStrategy] = useState<Strategy>({
     name: '',
     description: '',
@@ -311,8 +352,21 @@ export const StrategyBuilderPage = () => {
     }
   };
   
+  if (isLoading) {
+    return (
+      <PageLayout title="전략 빌더">
+        <div style={{ padding: '40px', textAlign: 'center' }}>
+          <div>전략 로딩 중...</div>
+        </div>
+      </PageLayout>
+    );
+  }
+  
   return (
-    <PageLayout title="전략 빌더" description="노코드로 나만의 매매 전략을 만드세요">
+    <PageLayout 
+      title={editingStrategyId ? "전략 수정" : "전략 빌더"} 
+      description={editingStrategyId ? "기존 전략을 수정합니다" : "노코드로 나만의 매매 전략을 만드세요"}
+    >
       
       <div className="builder-content">
         {/* 전략 기본 정보 */}
@@ -671,7 +725,7 @@ export const StrategyBuilderPage = () => {
                     type="number"
                     placeholder="최소 (예: 70)"
                     className="form-input"
-                    value={strategy.stockSelection.pricePosition?.from52WeekHigh?.min || ''}
+                    value={strategy.stockSelection.pricePosition?.from52WeekHigh?.min ?? ''}
                     onChange={(e) => setStrategy({
                       ...strategy,
                       stockSelection: {
@@ -680,8 +734,8 @@ export const StrategyBuilderPage = () => {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekHigh: {
                             ...strategy.stockSelection.pricePosition?.from52WeekHigh,
-                            min: Number(e.target.value),
-                            max: strategy.stockSelection.pricePosition?.from52WeekHigh?.max || 0,
+                            min: e.target.value === '' ? undefined : Number(e.target.value),
+                            max: strategy.stockSelection.pricePosition?.from52WeekHigh?.max,
                           },
                         },
                       },
@@ -692,7 +746,7 @@ export const StrategyBuilderPage = () => {
                     type="number"
                     placeholder="최대 (예: 100)"
                     className="form-input"
-                    value={strategy.stockSelection.pricePosition?.from52WeekHigh?.max || ''}
+                    value={strategy.stockSelection.pricePosition?.from52WeekHigh?.max ?? ''}
                     onChange={(e) => setStrategy({
                       ...strategy,
                       stockSelection: {
@@ -700,8 +754,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekHigh: {
-                            min: strategy.stockSelection.pricePosition?.from52WeekHigh?.min || 0,
-                            max: Number(e.target.value),
+                            min: strategy.stockSelection.pricePosition?.from52WeekHigh?.min,
+                            max: e.target.value === '' ? undefined : Number(e.target.value),
                           },
                         },
                       },
@@ -718,7 +772,7 @@ export const StrategyBuilderPage = () => {
                     type="number"
                     placeholder="최소 (예: 0)"
                     className="form-input"
-                    value={strategy.stockSelection.pricePosition?.from52WeekLow?.min || ''}
+                    value={strategy.stockSelection.pricePosition?.from52WeekLow?.min ?? ''}
                     onChange={(e) => setStrategy({
                       ...strategy,
                       stockSelection: {
@@ -727,8 +781,8 @@ export const StrategyBuilderPage = () => {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekLow: {
                             ...strategy.stockSelection.pricePosition?.from52WeekLow,
-                            min: Number(e.target.value),
-                            max: strategy.stockSelection.pricePosition?.from52WeekLow?.max || 0,
+                            min: e.target.value === '' ? undefined : Number(e.target.value),
+                            max: strategy.stockSelection.pricePosition?.from52WeekLow?.max,
                           },
                         },
                       },
@@ -739,7 +793,7 @@ export const StrategyBuilderPage = () => {
                     type="number"
                     placeholder="최대 (예: 30)"
                     className="form-input"
-                    value={strategy.stockSelection.pricePosition?.from52WeekLow?.max || ''}
+                    value={strategy.stockSelection.pricePosition?.from52WeekLow?.max ?? ''}
                     onChange={(e) => setStrategy({
                       ...strategy,
                       stockSelection: {
@@ -747,8 +801,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekLow: {
-                            min: strategy.stockSelection.pricePosition?.from52WeekLow?.min || 0,
-                            max: Number(e.target.value),
+                            min: strategy.stockSelection.pricePosition?.from52WeekLow?.min,
+                            max: e.target.value === '' ? undefined : Number(e.target.value),
                           },
                         },
                       },
@@ -2264,7 +2318,7 @@ export const StrategyBuilderPage = () => {
         {/* 저장 버튼 */}
         <div className="builder-actions">
           <button onClick={handleSave} className="btn btn-primary btn-large">
-            💾 전략 저장
+            {editingStrategyId ? '✏️ 전략 수정' : '💾 전략 저장'}
           </button>
           <button className="btn btn-secondary btn-large">
             🧪 백테스트 실행

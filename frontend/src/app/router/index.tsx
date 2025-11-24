@@ -6,6 +6,7 @@ import { LoginPage } from '../../pages/LoginPage';
 import { DashboardPage } from '../../pages/DashboardPage';
 import { BacktestPage } from '../../pages/BacktestPage';
 import { StrategyBuilderPage } from '../../pages/StrategyBuilderPage';
+import StrategyListPage from '../../pages/StrategyListPage';
 import SettingsPage from '../../pages/SettingsPage';
 
 // 인증 체크
@@ -51,6 +52,14 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <StrategyBuilderPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/strategies',
+    element: (
+      <ProtectedRoute>
+        <StrategyListPage />
       </ProtectedRoute>
     ),
   },

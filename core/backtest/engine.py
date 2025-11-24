@@ -4,6 +4,7 @@
 from typing import List, Dict, Any
 from datetime import datetime
 from copy import deepcopy
+import pandas as pd
 
 from core.strategy.base import BaseStrategy
 from core.backtest.position import PositionManager
@@ -98,8 +99,8 @@ class BacktestEngine:
         for i in range(len(ohlc_data)):
             current_bar = ohlc_data[i]
             
-            # 전략에 제공할 과거 데이터 (현재 바까지)
-            historical_bars = ohlc_data[:i+1]
+            # 전략에 제공할 과거 데이터 (현재 바까지) - DataFrame으로 변환
+            historical_bars = self._convert_to_dataframe(ohlc_data[:i+1])
             
             # 현재 계좌 상태
             account = self._get_account_state()
@@ -111,7 +112,11 @@ class BacktestEngine:
             self.position_manager.update_prices({current_bar.symbol: current_bar.close})
             
             # 전략 호출 - 주문 신호 생성
-            signals = self.strategy.on_bar(historical_bars, positions, account)
+            try:
+                signals = self.strategy.on_bar(historical_bars, positions, account)
+            except Exception as e:
+                logger.error(f"Strategy error at {current_bar.timestamp}: {e}", exc_info=True)
+                signals = []
             
             # 주문 신호 처리
             for signal in signals:
@@ -241,6 +246,34 @@ class BacktestEngine:
             created_at=timestamp,
             updated_at=timestamp
         )
+    
+    def _convert_to_dataframe(self, ohlc_list: List[OHLC]) -> pd.DataFrame:
+        """
+        OHLC 리스트를 DataFrame으로 변환
+        
+        Args:
+            ohlc_list: OHLC 객체 리스트
+        
+        Returns:
+            OHLCV DataFrame (timestamp 인덱스)
+        """
+        if not ohlc_list:
+            return pd.DataFrame()
+        
+        data = {
+            'timestamp': [bar.timestamp for bar in ohlc_list],
+            'open': [bar.open for bar in ohlc_list],
+            'high': [bar.high for bar in ohlc_list],
+            'low': [bar.low for bar in ohlc_list],
+            'close': [bar.close for bar in ohlc_list],
+            'volume': [bar.volume for bar in ohlc_list],
+            'value': [bar.value if bar.value is not None else bar.volume * bar.close for bar in ohlc_list]
+        }
+        
+        df = pd.DataFrame(data)
+        df = df.set_index('timestamp')
+        
+        return df
     
     def _update_equity(self, timestamp: datetime) -> None:
         """자산 곡선 업데이트"""

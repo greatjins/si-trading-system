@@ -32,7 +32,7 @@ class OrderStatus(Enum):
 
 @dataclass
 class OHLC:
-    """OHLC 데이터"""
+    """OHLC 데이터 (거래대금 포함)"""
     symbol: str
     timestamp: datetime
     open: float
@@ -40,13 +40,18 @@ class OHLC:
     low: float
     close: float
     volume: int
+    value: Optional[float] = None  # 거래대금 (volume * price)
 
     def __post_init__(self) -> None:
-        """데이터 검증"""
+        """데이터 검증 및 value 계산"""
         if self.high < self.low:
             raise ValueError(f"High ({self.high}) cannot be less than Low ({self.low})")
         if self.open < 0 or self.close < 0:
             raise ValueError("Prices cannot be negative")
+        
+        # value가 없으면 volume * close로 계산
+        if self.value is None:
+            self.value = self.volume * self.close
 
 
 @dataclass

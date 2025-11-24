@@ -41,10 +41,30 @@ export const BacktestPage = () => {
   useEffect(() => {
     const loadStrategies = async () => {
       try {
-        const response = await httpClient.get(ENDPOINTS.STRATEGY.LIST);
-        setStrategies(response.data);
-        if (response.data.length > 0) {
-          setSelectedStrategy(response.data[0].name);
+        // 코드 기반 전략 로드
+        const codeStrategiesResponse = await httpClient.get(ENDPOINTS.STRATEGY.LIST);
+        const codeStrategies = codeStrategiesResponse.data;
+        
+        // 전략 빌더 전략 로드
+        let builderStrategies = [];
+        try {
+          const builderResponse = await httpClient.get('/api/strategy-builder/list');
+          builderStrategies = builderResponse.data.map((s: any) => ({
+            name: s.name,
+            description: s.description,
+            author: 'Strategy Builder',
+            version: '1.0.0',
+          }));
+        } catch (err) {
+          console.log('전략 빌더 전략 로드 실패 (로그인 필요):', err);
+        }
+        
+        // 전략 합치기
+        const allStrategies = [...codeStrategies, ...builderStrategies];
+        setStrategies(allStrategies);
+        
+        if (allStrategies.length > 0) {
+          setSelectedStrategy(allStrategies[0].name);
         }
       } catch (err) {
         console.error('전략 목록 로드 실패:', err);

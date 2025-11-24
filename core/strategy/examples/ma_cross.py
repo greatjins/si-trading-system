@@ -8,8 +8,10 @@ from core.strategy.base import BaseStrategy
 from core.strategy.registry import strategy
 from utils.types import OHLC, Position, Account, OrderSignal, OrderSide, OrderType, Order
 from utils.logger import setup_logger
+from utils.signal_logger import get_signal_logger, SignalType
 
 logger = setup_logger(__name__)
+signal_logger = get_signal_logger()
 
 
 @strategy(
@@ -72,33 +74,72 @@ class MACrossStrategy(BaseStrategy):
     
     def on_bar(
         self,
-        bars: List[OHLC],
+        bars: pd.DataFrame,
         positions: List[Position],
         account: Account
     ) -> List[OrderSignal]:
-        """새로운 바마다 호출"""
+        """
+        새로운 바마다 호출
+        
+        Args:
+            bars: OHLCV DataFrame (timestamp 인덱스, ['open', 'high', 'low', 'close', 'volume', 'value'] 컬럼)
+            positions: 현재 포지션 리스트
+            account: 계좌 정보
+        
+        Returns:
+            주문 신호 리스트
+        """
         signals: List[OrderSignal] = []
+        
+        # 데이터 검증
+        if not self._validate_bars(bars):
+            return signals
         
         # 데이터 부족 시 대기
         if len(bars) < self.long_period:
+            logger.debug(f"[{self.name}] 데이터 부족: {len(bars)} < {self.long_period}")
             return signals
         
-        # 종가 데이터 추출
-        closes = [bar.close for bar in bars]
+        # 이동평균 계산 (pandas 활용)
+        short_ma = bars['close'].rolling(window=self.short_period).mean()
+        long_ma = bars['close'].rolling(window=self.long_period).mean()
         
-        # 이동평균 계산
-        short_ma = sum(closes[-self.short_period:]) / self.short_period
-        long_ma = sum(closes[-self.long_period:]) / self.long_period
+        # 현재 및 이전 값
+        current_short_ma = short_ma.iloc[-1]
+        current_long_ma = long_ma.iloc[-1]
+        prev_short_ma = short_ma.iloc[-2] if len(short_ma) > 1 else current_short_ma
+        prev_long_ma = long_ma.iloc[-2] if len(long_ma) > 1 else current_long_ma
         
-        # 이전 이동평균 (교차 감지용)
-        prev_short_ma = sum(closes[-self.short_period-1:-1]) / self.short_period
-        prev_long_ma = sum(closes[-self.long_period-1:-1]) / self.long_period
-        
-        current_price = bars[-1].close
+        current_price = bars['close'].iloc[-1]
         position = self.get_position(self.symbol, positions)
         
-        # 골든크로스 (매수 신호)
-        if prev_short_ma <= prev_long_ma and short_ma > long_ma:
+        # 골든크로스 감지 (매수 신호)
+        golden_cross = prev_short_ma <= prev_long_ma and current_short_ma > current_long_ma
+        
+        # 데드크로스 감지 (매도 신호)
+        dead_cross = prev_short_ma >= prev_long_ma and current_short_ma < current_long_ma
+        
+        # 현재 상태 로깅 (분석용)
+        current_state = "관망"
+        if golden_cross:
+            current_state = "매수 신호"
+        elif dead_cross:
+            current_state = "매도 신호"
+        
+        signal_logger.log_state(
+            strategy_name=self.name,
+            symbol=self.symbol,
+            timestamp=bars.index[-1],
+            state=current_state,
+            indicators={
+                'short_ma': current_short_ma,
+                'long_ma': current_long_ma,
+                'price': current_price
+            }
+        )
+        
+        # 골든크로스 (매수)
+        if golden_cross:
             if not position:  # 포지션이 없을 때만 매수
                 quantity = self._calculate_quantity(account.equity, current_price)
                 
@@ -112,10 +153,25 @@ class MACrossStrategy(BaseStrategy):
                     signals.append(signal)
                     self.last_signal = "buy"
                     
-                    logger.info(f"[{self.name}] 골든크로스 매수 신호: {self.symbol}, 수량: {quantity}")
+                    # SignalLogger 사용
+                    signal_logger.log_entry_signal(
+                        strategy_name=self.name,
+                        signal=signal,
+                        reason=f"골든크로스: 단기MA({self.short_period})가 장기MA({self.long_period})를 상향 돌파",
+                        current_price=current_price,
+                        account_equity=account.equity,
+                        indicators={
+                            '단기MA': current_short_ma,
+                            '장기MA': current_long_ma,
+                            '이전_단기MA': prev_short_ma,
+                            '이전_장기MA': prev_long_ma
+                        }
+                    )
+            else:
+                logger.debug(f"[{self.name}] 골든크로스 감지했으나 이미 포지션 보유 중 (중복 진입 방지)")
         
-        # 데드크로스 (매도 신호)
-        elif prev_short_ma >= prev_long_ma and short_ma < long_ma:
+        # 데드크로스 (매도)
+        elif dead_cross:
             if position and position.quantity > 0:  # 포지션이 있을 때만 매도
                 signal = OrderSignal(
                     symbol=self.symbol,
@@ -126,7 +182,17 @@ class MACrossStrategy(BaseStrategy):
                 signals.append(signal)
                 self.last_signal = "sell"
                 
-                logger.info(f"[{self.name}] 데드크로스 매도 신호: {self.symbol}, 수량: {position.quantity}")
+                # SignalLogger 사용
+                signal_logger.log_exit_signal(
+                    strategy_name=self.name,
+                    signal=signal,
+                    reason=f"데드크로스: 단기MA({self.short_period})가 장기MA({self.long_period})를 하향 돌파",
+                    current_price=current_price,
+                    position=position,
+                    signal_type=SignalType.EXIT
+                )
+            else:
+                logger.debug(f"[{self.name}] 데드크로스 감지했으나 포지션 없음 (청산 불필요)")
         
         return signals
     
@@ -136,6 +202,36 @@ class MACrossStrategy(BaseStrategy):
             f"[{self.name}] 주문 체결: {order.side.value} {order.filled_quantity} "
             f"{order.symbol} @ {order.price or 'MARKET'}"
         )
+    
+    def _validate_bars(self, bars: pd.DataFrame) -> bool:
+        """
+        바 데이터 유효성 검증
+        
+        Args:
+            bars: OHLCV DataFrame
+        
+        Returns:
+            유효 여부
+        """
+        # 필수 컬럼 확인
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [col for col in required_cols if col not in bars.columns]
+        
+        if missing_cols:
+            logger.error(f"[{self.name}] 필수 컬럼 누락: {missing_cols}")
+            return False
+        
+        # 빈 DataFrame 확인
+        if len(bars) == 0:
+            logger.warning(f"[{self.name}] 빈 DataFrame")
+            return False
+        
+        # NaN 확인
+        if bars[required_cols].isna().any().any():
+            logger.warning(f"[{self.name}] NaN 값 발견")
+            return False
+        
+        return True
     
     def _calculate_quantity(self, equity: float, price: float) -> int:
         """
@@ -148,6 +244,17 @@ class MACrossStrategy(BaseStrategy):
         Returns:
             매수 수량
         """
+        if price <= 0:
+            logger.error(f"[{self.name}] 잘못된 가격: {price}")
+            return 0
+        
         position_value = equity * self.position_size
         quantity = int(position_value / price)
-        return quantity
+        
+        logger.debug(
+            f"[{self.name}] 수량 계산: "
+            f"자산={equity:,.0f}, 비율={self.position_size:.1%}, "
+            f"포지션금액={position_value:,.0f}, 가격={price:,.0f}, 수량={quantity}"
+        )
+        
+        return max(1, quantity)  # 최소 1주

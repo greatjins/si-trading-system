@@ -49,6 +49,12 @@ export const PageLayout = ({ children, title, description }: PageLayoutProps) =>
               🔧 전략 빌더
             </Link>
             <Link 
+              to="/strategies" 
+              className={`nav-link ${location.pathname === '/strategies' ? 'active' : ''}`}
+            >
+              📋 내 전략
+            </Link>
+            <Link 
               to="/settings" 
               className={`nav-link ${location.pathname === '/settings' ? 'active' : ''}`}
             >

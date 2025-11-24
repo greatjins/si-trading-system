@@ -3,6 +3,7 @@
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+import pandas as pd
 
 from utils.types import OHLC, Position, Account, OrderSignal, Order
 from utils.logger import setup_logger
@@ -34,7 +35,7 @@ class BaseStrategy(ABC):
     @abstractmethod
     def on_bar(
         self,
-        bars: List[OHLC],
+        bars: pd.DataFrame,
         positions: List[Position],
         account: Account
     ) -> List[OrderSignal]:
@@ -42,7 +43,10 @@ class BaseStrategy(ABC):
         새로운 바마다 호출됨 (백테스트) 또는 가격 업데이트마다 호출됨 (실시간)
         
         Args:
-            bars: 과거 OHLC 바 리스트 (가장 최근이 마지막)
+            bars: OHLCV DataFrame
+                - Index: timestamp (datetime)
+                - Columns: ['open', 'high', 'low', 'close', 'volume', 'value']
+                - 가장 최근 바가 마지막 행
             positions: 현재 보유 포지션 리스트
             account: 현재 계좌 상태
         
@@ -53,6 +57,25 @@ class BaseStrategy(ABC):
             - 전략은 브로커 API를 직접 호출하지 않습니다
             - 엔진이 제공한 데이터만 사용합니다
             - 주문 신호만 반환하며, 실제 주문은 엔진이 처리합니다
+            - bars DataFrame은 최소 ['open', 'high', 'low', 'close', 'volume'] 컬럼을 포함합니다
+            - 'value' 컬럼이 없으면 volume * close로 계산됩니다
+        
+        Example:
+            ```python
+            def on_bar(self, bars, positions, account):
+                if len(bars) < 20:
+                    return []
+                
+                # 기술적 지표 계산
+                ma20 = bars['close'].rolling(20).mean()
+                current_price = bars['close'].iloc[-1]
+                
+                # 매수 신호
+                if current_price > ma20.iloc[-1]:
+                    return [OrderSignal(...)]
+                
+                return []
+            ```
         """
         pass
     

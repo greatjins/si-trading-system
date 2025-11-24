@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { httpClient } from '../services/http';
 import { Link } from 'react-router-dom';
+import { useAccountStore } from '../app/store/accountStore';
 
 interface Account {
   id: number;
@@ -12,8 +13,8 @@ interface Account {
 
 export function AccountSelector() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const { selectedAccountId, setSelectedAccountId } = useAccountStore();
 
   useEffect(() => {
     loadAccounts();
@@ -38,8 +39,6 @@ export function AccountSelector() {
       setLoading(false);
     }
   };
-
-  const selectedAccount = accounts.find((acc) => acc.id === selectedAccountId);
 
   if (loading) {
     return <div className="account-selector">로딩 중...</div>;

@@ -17,6 +17,25 @@ interface TradingAccount {
   created_at: string;
 }
 
+interface AccountBalance {
+  account_id: number;
+  account_number: string;
+  broker: string;
+  balance: number;
+  equity: number;
+  margin_used: number;
+  margin_available: number;
+  buying_power: number;
+  positions: Array<{
+    symbol: string;
+    quantity: number;
+    avg_price: number;
+    current_price: number;
+    unrealized_pnl: number;
+    realized_pnl: number;
+  }>;
+}
+
 const BROKER_NAMES: Record<string, string> = {
   ls: 'LS증권',
   kiwoom: '키움증권',
@@ -37,6 +56,8 @@ interface AccountsPageProps {
 
 export default function AccountsPage({ embedded = false }: AccountsPageProps) {
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
+  const [balances, setBalances] = useState<Record<number, AccountBalance>>({});
+  const [loadingBalances, setLoadingBalances] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingAccount, setEditingAccount] = useState<TradingAccount | null>(null);
@@ -154,6 +175,27 @@ export default function AccountsPage({ embedded = false }: AccountsPageProps) {
     }
   };
 
+  const loadAccountBalance = async (accountId: number) => {
+    setLoadingBalances((prev) => ({ ...prev, [accountId]: true }));
+    try {
+      const response = await httpClient.get(`/api/accounts/${accountId}/balance`);
+      setBalances((prev) => ({ ...prev, [accountId]: response.data }));
+    } catch (error) {
+      console.error('계좌 잔고 조회 실패:', error);
+      alert('계좌 잔고 조회에 실패했습니다.');
+    } finally {
+      setLoadingBalances((prev) => ({ ...prev, [accountId]: false }));
+    }
+  };
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('ko-KR', {
+      style: 'decimal',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
   if (loading) {
     return (
       <PageLayout title="계좌 관리">
@@ -242,7 +284,53 @@ export default function AccountsPage({ embedded = false }: AccountsPageProps) {
                       <span>{account.api_key_masked}</span>
                     </div>
                   )}
-                  <div className="info-row text-secondary">
+                  
+                  {/* 잔고 정보 */}
+                  {account.is_active && (
+                    <div className="account-balance-section">
+                      {!balances[account.id] ? (
+                        <button
+                          onClick={() => loadAccountBalance(account.id)}
+                          className="btn btn-sm btn-primary"
+                          disabled={loadingBalances[account.id]}
+                          style={{ marginTop: '12px' }}
+                        >
+                          {loadingBalances[account.id] ? '조회 중...' : '💰 잔고 조회'}
+                        </button>
+                      ) : (
+                        <div className="balance-info" style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                          <div className="info-row">
+                            <span className="label">예수금:</span>
+                            <span className="value">{formatCurrency(balances[account.id].balance)}원</span>
+                          </div>
+                          <div className="info-row">
+                            <span className="label">순자산:</span>
+                            <span className="value" style={{ fontWeight: 'bold' }}>{formatCurrency(balances[account.id].equity)}원</span>
+                          </div>
+                          <div className="info-row">
+                            <span className="label">매수가능:</span>
+                            <span className="value">{formatCurrency(balances[account.id].buying_power)}원</span>
+                          </div>
+                          {balances[account.id].positions.length > 0 && (
+                            <div className="info-row">
+                              <span className="label">보유종목:</span>
+                              <span className="value">{balances[account.id].positions.length}개</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => loadAccountBalance(account.id)}
+                            className="btn btn-sm"
+                            disabled={loadingBalances[account.id]}
+                            style={{ marginTop: '8px', width: '100%' }}
+                          >
+                            🔄 새로고침
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div className="info-row text-secondary" style={{ marginTop: '8px' }}>
                     <span>등록일: {new Date(account.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
