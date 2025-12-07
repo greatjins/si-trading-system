@@ -55,6 +55,12 @@ export const PageLayout = ({ children, title, description }: PageLayoutProps) =>
               📋 내 전략
             </Link>
             <Link 
+              to="/data-collection" 
+              className={`nav-link ${location.pathname === '/data-collection' ? 'active' : ''}`}
+            >
+              💾 데이터 수집
+            </Link>
+            <Link 
               to="/settings" 
               className={`nav-link ${location.pathname === '/settings' ? 'active' : ''}`}
             >

@@ -23,23 +23,27 @@ class LSAccountService:
         """
         self.client = client
     
-    async def get_account_balance(self, account_id: str) -> LSAccount:
+    async def get_account_balance(self, account_number: str, account_password: str = None) -> LSAccount:
         """
         계좌 잔고 조회 (t0424 - 주식잔고2)
         
         Args:
-            account_id: 계좌번호 (예: "555044505-01")
+            account_number: 계좌번호 (예: "555044505-01")
+            account_password: 계좌 비밀번호 (선택, None이면 config에서 가져옴)
             
         Returns:
             계좌 정보
         """
         try:
             # 계좌번호에서 "-" 제거
-            clean_account = account_id.replace("-", "")
+            clean_account = account_number.replace("-", "")
             
-            # 계좌 비밀번호 (config에서 가져오기)
-            from utils.config import config
-            password = config.get("ls.account_password", "")
+            # 계좌 비밀번호
+            if account_password is None:
+                from utils.config import config
+                password = config.get("ls.account_password", "")
+            else:
+                password = account_password
             
             # LS증권 주식잔고 조회 API (t0424)
             response = await self.client.request(
@@ -68,7 +72,7 @@ class LSAccountService:
             
             # 계좌 정보 생성
             return LSAccount(
-                account_id=account_id,
+                account_id=account_number,  # 원본 계좌번호 (하이픈 포함)
                 balance=float(output.get("mamt", 0)),  # 예수금
                 equity=float(output.get("sunamt", 0)),  # 추정순자산
                 stock_value=float(output.get("tappamt", 0)),  # 총평가금액
@@ -84,23 +88,27 @@ class LSAccountService:
             logger.error(f"Failed to get account balance: {e}")
             raise
     
-    async def get_positions(self, account_id: str) -> List[LSPosition]:
+    async def get_positions(self, account_number: str, account_password: str = None) -> List[LSPosition]:
         """
         보유 종목 조회 (t0424 - 주식잔고2)
         
         Args:
-            account_id: 계좌번호
+            account_number: 계좌번호
+            account_password: 계좌 비밀번호 (선택, None이면 config에서 가져옴)
             
         Returns:
             보유 종목 리스트
         """
         try:
             # 계좌번호에서 "-" 제거
-            clean_account = account_id.replace("-", "")
+            clean_account = account_number.replace("-", "")
             
             # 계좌 비밀번호
-            from utils.config import config
-            password = config.get("ls.account_password", "")
+            if account_password is None:
+                from utils.config import config
+                password = config.get("ls.account_password", "")
+            else:
+                password = account_password
             
             # LS증권 주식잔고 조회 API (t0424)
             response = await self.client.request(
@@ -208,8 +216,10 @@ class LSAccountService:
         Returns:
             공통 Account 타입
         """
+        # account_id는 계좌번호여야 함 (예: "555044505-01")
+        # ls_account.account_id가 이미 올바른 형식이어야 함
         return Account(
-            account_id=ls_account.account_id,
+            account_id=ls_account.account_id,  # 계좌번호 (예: "555044505-01")
             balance=ls_account.balance,
             equity=ls_account.equity,
             margin_used=ls_account.margin_used,

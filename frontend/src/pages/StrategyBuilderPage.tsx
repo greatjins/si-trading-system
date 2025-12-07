@@ -733,9 +733,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekHigh: {
-                            ...strategy.stockSelection.pricePosition?.from52WeekHigh,
-                            min: e.target.value === '' ? undefined : Number(e.target.value),
-                            max: strategy.stockSelection.pricePosition?.from52WeekHigh?.max,
+                            min: e.target.value === '' ? 0 : Number(e.target.value),
+                            max: strategy.stockSelection.pricePosition?.from52WeekHigh?.max || 100,
                           },
                         },
                       },
@@ -754,8 +753,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekHigh: {
-                            min: strategy.stockSelection.pricePosition?.from52WeekHigh?.min,
-                            max: e.target.value === '' ? undefined : Number(e.target.value),
+                            min: strategy.stockSelection.pricePosition?.from52WeekHigh?.min || 0,
+                            max: e.target.value === '' ? 100 : Number(e.target.value),
                           },
                         },
                       },
@@ -780,9 +779,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekLow: {
-                            ...strategy.stockSelection.pricePosition?.from52WeekLow,
-                            min: e.target.value === '' ? undefined : Number(e.target.value),
-                            max: strategy.stockSelection.pricePosition?.from52WeekLow?.max,
+                            min: e.target.value === '' ? 0 : Number(e.target.value),
+                            max: strategy.stockSelection.pricePosition?.from52WeekLow?.max || 100,
                           },
                         },
                       },
@@ -801,8 +799,8 @@ export const StrategyBuilderPage = () => {
                         pricePosition: {
                           ...strategy.stockSelection.pricePosition,
                           from52WeekLow: {
-                            min: strategy.stockSelection.pricePosition?.from52WeekLow?.min,
-                            max: e.target.value === '' ? undefined : Number(e.target.value),
+                            min: strategy.stockSelection.pricePosition?.from52WeekLow?.min || 0,
+                            max: e.target.value === '' ? 100 : Number(e.target.value),
                           },
                         },
                       },

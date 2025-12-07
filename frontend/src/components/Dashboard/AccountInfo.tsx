@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { accountAPI } from '../../services/api'
-import { useWebSocketMessage } from '../../hooks/useWebSocket'
 import type { AccountInfo as AccountInfoType } from '../../types'
 
 export function AccountInfo() {
@@ -10,10 +9,6 @@ export function AccountInfo() {
   useEffect(() => {
     loadAccount()
   }, [])
-  
-  useWebSocketMessage('account', (data) => {
-    setAccount(data.data)
-  })
   
   const loadAccount = async () => {
     try {

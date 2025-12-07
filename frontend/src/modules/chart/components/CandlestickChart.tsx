@@ -2,7 +2,7 @@
  * TradingView Lightweight Charts 캔들스틱 차트
  */
 import { useEffect, useRef } from 'react';
-import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts';
 import { useChartStore } from '../../../app/store/chartStore';
 import { CHART_COLORS } from '../../../constants/chart-constants';
 
@@ -67,8 +67,8 @@ export const CandlestickChart = () => {
   useEffect(() => {
     if (!candleSeriesRef.current || candles.length === 0) return;
     
-    const chartData: CandlestickData[] = candles.map((candle) => ({
-      time: new Date(candle.timestamp).getTime() / 1000,
+    const chartData = candles.map((candle) => ({
+      time: Math.floor(new Date(candle.timestamp).getTime() / 1000) as any,
       open: candle.open,
       high: candle.high,
       low: candle.low,

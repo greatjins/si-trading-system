@@ -50,7 +50,7 @@ export default function StrategyListPage() {
     }
   };
 
-  const handleBacktest = (strategyId: number, name: string) => {
+  const handleBacktest = (_strategyId: number, name: string) => {
     navigate(`/backtest?strategy=${encodeURIComponent(name)}`);
   };
 

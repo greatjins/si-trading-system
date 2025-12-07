@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts'
+import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCData } from '../../types'
 
 interface CandlestickChartProps {
@@ -72,9 +72,9 @@ export function CandlestickChart({ data, symbol }: CandlestickChartProps) {
   useEffect(() => {
     if (!seriesRef.current || !data.length) return
     
-    // 데이터 변환
-    const chartData: CandlestickData[] = data.map((item) => ({
-      time: new Date(item.timestamp).getTime() / 1000,
+    // 데이터 변환 (타임스탬프를 초 단위로 변환)
+    const chartData = data.map((item) => ({
+      time: Math.floor(new Date(item.timestamp).getTime() / 1000) as any,
       open: item.open,
       high: item.high,
       low: item.low,

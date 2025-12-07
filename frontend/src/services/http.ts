@@ -47,7 +47,7 @@ httpClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     console.log('📤 API 요청:', config.method?.toUpperCase(), config.url);
     console.log('  - baseURL:', config.baseURL);
-    console.log('  - 전체 URL:', config.baseURL + config.url);
+    console.log('  - 전체 URL:', (config.baseURL || '') + (config.url || ''));
     
     // 토큰 추가
     const token = localStorage.getItem('access_token');

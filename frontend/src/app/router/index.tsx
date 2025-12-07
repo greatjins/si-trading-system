@@ -8,6 +8,7 @@ import { BacktestPage } from '../../pages/BacktestPage';
 import { StrategyBuilderPage } from '../../pages/StrategyBuilderPage';
 import StrategyListPage from '../../pages/StrategyListPage';
 import SettingsPage from '../../pages/SettingsPage';
+import DataCollection from '../../pages/DataCollection';
 
 // 인증 체크
 const isAuthenticated = () => {
@@ -68,6 +69,14 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <SettingsPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/data-collection',
+    element: (
+      <ProtectedRoute>
+        <DataCollection />
       </ProtectedRoute>
     ),
   },

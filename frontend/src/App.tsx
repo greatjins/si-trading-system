@@ -1,35 +1,22 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+/**
+ * 메인 앱 컴포넌트
+ * 
+ * Note: 현재 main.tsx에서 AppProvider를 직접 사용하므로
+ * 이 파일은 사용되지 않습니다.
+ * 
+ * 향후 개선 시 다음과 같이 구조를 변경할 수 있습니다:
+ * - main.tsx: <App /> 렌더링
+ * - App.tsx: WebSocketProvider + RouterProvider 포함
+ */
 
-function App() {
-  const [count, setCount] = useState(0)
+import { WebSocketProvider } from './services/websocket'
+import { RouterProvider } from 'react-router-dom'
+import { router } from './app/router'
 
+export default function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    <WebSocketProvider>
+      <RouterProvider router={router} />
+    </WebSocketProvider>
   )
 }
-
-export default App

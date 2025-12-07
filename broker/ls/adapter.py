@@ -115,7 +115,11 @@ class LSAdapter(BrokerBase):
         """
         logger.info(f"Getting account: {self.account_id}")
         
-        ls_account = await self.account_service.get_account_balance(self.account_id)
+        # account_id는 계좌번호, account_password는 config에서 가져옴
+        from utils.config import config
+        account_password = config.get("ls.account_password", "")
+        
+        ls_account = await self.account_service.get_account_balance(self.account_id, account_password)
         return self.account_service.to_account(ls_account)
     
     async def get_positions(self) -> List[Position]:
@@ -127,7 +131,11 @@ class LSAdapter(BrokerBase):
         """
         logger.info(f"Getting positions: {self.account_id}")
         
-        ls_positions = await self.account_service.get_positions(self.account_id)
+        # account_id는 계좌번호, account_password는 config에서 가져옴
+        from utils.config import config
+        account_password = config.get("ls.account_password", "")
+        
+        ls_positions = await self.account_service.get_positions(self.account_id, account_password)
         return [self.account_service.to_position(pos) for pos in ls_positions]
     
     async def place_order(

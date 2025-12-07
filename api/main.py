@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder, accounts
+from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder, accounts, data_collection
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -54,9 +54,23 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """유효성 검사 예외 로깅"""
     logger.warning(f"Validation error: {exc.errors()}")
+    
+    # bytes를 str로 변환하여 JSON 직렬화 가능하게 만듦
+    errors = []
+    for error in exc.errors():
+        error_dict = {}
+        for key, value in error.items():
+            if isinstance(value, bytes):
+                error_dict[key] = value.decode('utf-8')
+            elif isinstance(value, tuple):
+                error_dict[key] = [v.decode('utf-8') if isinstance(v, bytes) else v for v in value]
+            else:
+                error_dict[key] = value
+        errors.append(error_dict)
+    
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors()}
+        content={"detail": errors}
     )
 
 # 라우터 등록
@@ -70,6 +84,7 @@ app.include_router(strategies.router, prefix="/api/strategies", tags=["전략 �
 app.include_router(backtest.router, prefix="/api/backtest", tags=["백테스트"])
 app.include_router(price.router, prefix="/api/price", tags=["시세"])
 app.include_router(strategy_builder.router, prefix="/api/strategy-builder", tags=["전략 빌더"])
+app.include_router(data_collection.router, tags=["데이터 수집"])
 
 
 @app.on_event("startup")

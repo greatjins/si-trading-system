@@ -42,10 +42,24 @@ def get_db_session() -> Session:
 
 
 class DataRepository:
-    """데이터 조회 Repository"""
+    """
+    데이터 조회 Repository (통합)
     
-    def __init__(self):
+    PostgreSQL 우선, 없으면 Parquet 파일 폴백
+    """
+    
+    def __init__(self, use_db: bool = True):
+        """
+        Args:
+            use_db: DB 사용 여부 (False면 파일만 사용)
+        """
+        self.use_db = use_db
         self.storage = FileStorage()
+        
+        if use_db:
+            self.ohlc_repo = OHLCRepository()
+        else:
+            self.ohlc_repo = None
     
     def get_ohlc(
         self,
@@ -55,7 +69,7 @@ class DataRepository:
         end_date: datetime = None
     ) -> pd.DataFrame:
         """
-        OHLC 데이터 조회
+        OHLC 데이터 조회 (DB 우선, 파일 폴백)
         
         Args:
             symbol: 종목 코드
@@ -67,6 +81,14 @@ class DataRepository:
             OHLC DataFrame
         """
         try:
+            # 1. DB에서 조회 시도
+            if self.use_db and self.ohlc_repo:
+                data = self.ohlc_repo.get_ohlc(symbol, interval, start_date, end_date)
+                if not data.empty:
+                    logger.debug(f"Loaded {len(data)} records from DB: {symbol}")
+                    return data
+            
+            # 2. 파일에서 조회 (폴백)
             data = self.storage.load(symbol, interval)
             
             if data.empty:
@@ -78,11 +100,55 @@ class DataRepository:
             if end_date:
                 data = data[data.index <= end_date]
             
+            logger.debug(f"Loaded {len(data)} records from file: {symbol}")
             return data
         
         except Exception as e:
             logger.error(f"Failed to get OHLC data: {e}")
             return pd.DataFrame()
+    
+    def get_ohlc_as_list(
+        self,
+        symbol: str,
+        interval: str = "1d",
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> List:
+        """
+        OHLC 데이터를 List[OHLC] 형태로 조회 (백테스트 엔진용)
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+            start_date: 시작일
+            end_date: 종료일
+            
+        Returns:
+            OHLC 객체 리스트
+        """
+        from utils.types import OHLC
+        
+        df = self.get_ohlc(symbol, interval, start_date, end_date)
+        
+        if df.empty:
+            return []
+        
+        # DataFrame → List[OHLC] 변환
+        ohlc_list = []
+        for timestamp, row in df.iterrows():
+            ohlc = OHLC(
+                symbol=symbol,
+                timestamp=timestamp,
+                open=float(row['open']),
+                high=float(row['high']),
+                low=float(row['low']),
+                close=float(row['close']),
+                volume=int(row['volume']),
+                value=float(row.get('value', row['volume'] * row['close']))
+            )
+            ohlc_list.append(ohlc)
+        
+        return ohlc_list
     
     def get_available_symbols(self) -> List[str]:
         """
@@ -92,10 +158,263 @@ class DataRepository:
             종목 코드 리스트
         """
         try:
+            # DB에서 조회
+            if self.use_db and self.ohlc_repo:
+                from data.stock_filter import StockFilter
+                stock_filter = StockFilter()
+                return stock_filter.get_all_symbols()
+            
+            # 파일에서 조회
             return self.storage.list_symbols()
         except Exception as e:
             logger.error(f"Failed to get symbols: {e}")
             return []
+
+
+class OHLCRepository:
+    """OHLC 데이터 저장소"""
+    
+    def __init__(self, db_url: str = None):
+        """
+        Args:
+            db_url: 데이터베이스 URL (None이면 config에서 로드)
+        """
+        if db_url is None:
+            db_type = config.get("database.type", "sqlite")
+            if db_type == "sqlite":
+                db_path = config.get("database.path", "data/hts.db")
+                db_url = f"sqlite:///{db_path}"
+            else:
+                # PostgreSQL
+                host = config.get("database.host", "localhost")
+                port = config.get("database.port", 5432)
+                database = config.get("database.database", "hts")
+                username = config.get("database.user", "hts_user")
+                password = config.get("database.password", "")
+                db_url = f"postgresql+pg8000://{username}:{password}@{host}:{port}/{database}"
+        
+        self.engine = create_engine(db_url, echo=False)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        
+        # 테이블 생성
+        from data.models import OHLCModel
+        Base.metadata.create_all(self.engine)
+        
+        logger.info(f"OHLCRepository initialized: {db_url}")
+    
+    async def save_ohlc(self, ohlc, interval: str) -> bool:
+        """
+        OHLC 데이터 저장 (단일)
+        
+        Args:
+            ohlc: OHLC 데이터
+            interval: 시간 간격
+        
+        Returns:
+            저장 성공 여부
+        """
+        from data.models import OHLCModel
+        session = self.SessionLocal()
+        
+        try:
+            model = OHLCModel(
+                symbol=ohlc.symbol,
+                interval=interval,
+                timestamp=ohlc.timestamp,
+                open=float(ohlc.open),
+                high=float(ohlc.high),
+                low=float(ohlc.low),
+                close=float(ohlc.close),
+                volume=int(ohlc.volume)
+            )
+            
+            session.merge(model)  # INSERT or UPDATE
+            session.commit()
+            return True
+        
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to save OHLC: {e}")
+            return False
+        finally:
+            session.close()
+    
+    async def save_ohlc_batch(self, ohlc_list: List, interval: str) -> int:
+        """
+        OHLC 데이터 배치 저장 (중복 무시)
+        
+        Args:
+            ohlc_list: OHLC 데이터 리스트
+            interval: 시간 간격
+        
+        Returns:
+            저장된 레코드 수
+        """
+        from data.models import OHLCModel
+        from sqlalchemy.exc import IntegrityError
+        
+        session = self.SessionLocal()
+        
+        try:
+            saved_count = 0
+            
+            with session.no_autoflush:
+                for ohlc in ohlc_list:
+                    # 기존 데이터 확인
+                    existing = session.query(OHLCModel).filter_by(
+                        symbol=ohlc.symbol,
+                        interval=interval,
+                        timestamp=ohlc.timestamp
+                    ).first()
+                    
+                    if existing:
+                        # 기존 데이터 업데이트
+                        existing.open = float(ohlc.open)
+                        existing.high = float(ohlc.high)
+                        existing.low = float(ohlc.low)
+                        existing.close = float(ohlc.close)
+                        existing.volume = int(ohlc.volume)
+                    else:
+                        # 새 데이터 추가
+                        model = OHLCModel(
+                            symbol=ohlc.symbol,
+                            interval=interval,
+                            timestamp=ohlc.timestamp,
+                            open=float(ohlc.open),
+                            high=float(ohlc.high),
+                            low=float(ohlc.low),
+                            close=float(ohlc.close),
+                            volume=int(ohlc.volume)
+                        )
+                        session.add(model)
+                        saved_count += 1
+            
+            session.commit()
+            logger.info(f"Saved {saved_count} new OHLC records (total processed: {len(ohlc_list)})")
+            return saved_count
+        
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to save OHLC batch: {e}")
+            return 0
+        finally:
+            session.close()
+    
+    def get_ohlc(
+        self,
+        symbol: str,
+        interval: str,
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> pd.DataFrame:
+        """
+        OHLC 데이터 조회
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+            start_date: 시작일
+            end_date: 종료일
+        
+        Returns:
+            OHLC DataFrame
+        """
+        from data.models import OHLCModel
+        session = self.SessionLocal()
+        
+        try:
+            query = session.query(OHLCModel).filter_by(
+                symbol=symbol,
+                interval=interval
+            )
+            
+            if start_date:
+                query = query.filter(OHLCModel.timestamp >= start_date)
+            if end_date:
+                query = query.filter(OHLCModel.timestamp <= end_date)
+            
+            query = query.order_by(OHLCModel.timestamp)
+            
+            results = query.all()
+            
+            if not results:
+                return pd.DataFrame()
+            
+            # DataFrame 변환
+            data = {
+                'timestamp': [r.timestamp for r in results],
+                'open': [r.open for r in results],
+                'high': [r.high for r in results],
+                'low': [r.low for r in results],
+                'close': [r.close for r in results],
+                'volume': [r.volume for r in results]
+            }
+            
+            df = pd.DataFrame(data)
+            df.set_index('timestamp', inplace=True)
+            
+            return df
+        
+        except Exception as e:
+            logger.error(f"Failed to get OHLC: {e}")
+            return pd.DataFrame()
+        finally:
+            session.close()
+    
+    def get_latest_timestamp(self, symbol: str, interval: str) -> Optional[datetime]:
+        """
+        마지막 데이터 시점 조회 (증분 업데이트용)
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+        
+        Returns:
+            마지막 timestamp (없으면 None)
+        """
+        from data.models import OHLCModel
+        session = self.SessionLocal()
+        
+        try:
+            result = session.query(OHLCModel).filter_by(
+                symbol=symbol,
+                interval=interval
+            ).order_by(OHLCModel.timestamp.desc()).first()
+            
+            return result.timestamp if result else None
+        finally:
+            session.close()
+    
+    def delete_ohlc(self, symbol: str, interval: str) -> bool:
+        """
+        OHLC 데이터 삭제
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+        
+        Returns:
+            삭제 성공 여부
+        """
+        from data.models import OHLCModel
+        session = self.SessionLocal()
+        
+        try:
+            count = session.query(OHLCModel).filter_by(
+                symbol=symbol,
+                interval=interval
+            ).delete()
+            
+            session.commit()
+            logger.info(f"Deleted {count} OHLC records for {symbol}")
+            return True
+        
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to delete OHLC: {e}")
+            return False
+        finally:
+            session.close()
 
 
 class BacktestRepository:

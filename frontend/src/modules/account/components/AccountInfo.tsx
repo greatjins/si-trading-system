@@ -54,18 +54,19 @@ export const AccountInfo = () => {
     return () => clearInterval(interval);
   }, [selectedAccountId]);
   
-  const handleDisconnect = async () => {
-    if (!selectedAccountId) return;
-    
-    try {
-      await httpClient.post(`/api/accounts/${selectedAccountId}/disconnect`);
-      setConnectionStatus({ connected: false });
-      alert('연결이 종료되었습니다');
-    } catch (error) {
-      console.error('연결 종료 실패:', error);
-      alert('연결 종료에 실패했습니다');
-    }
-  };
+  // 연결 종료 핸들러 (향후 사용 예정)
+  // const handleDisconnect = async () => {
+  //   if (!selectedAccountId) return;
+  //   
+  //   try {
+  //     await httpClient.post(`/api/accounts/${selectedAccountId}/disconnect`);
+  //     setConnectionStatus({ connected: false });
+  //     alert('연결이 종료되었습니다');
+  //   } catch (error) {
+  //     console.error('연결 종료 실패:', error);
+  //     alert('연결 종료에 실패했습니다');
+  //   }
+  // };
   
   const handleKeepAlive = async () => {
     if (!selectedAccountId) return;

@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Boolean
+from sqlalchemy import Column, Integer, BigInteger, String, Float, DateTime, Text, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -87,3 +87,58 @@ class StrategyBuilderModel(Base):
     
     def __repr__(self) -> str:
         return f"<StrategyBuilder(id={self.id}, name={self.name}, user_id={self.user_id})>"
+
+
+class StockMasterModel(Base):
+    """종목 마스터 테이블"""
+    __tablename__ = "stock_master"
+    
+    symbol = Column(String(20), primary_key=True)
+    name = Column(String(100), nullable=False)
+    market = Column(String(20), nullable=True)  # KOSPI, KOSDAQ
+    sector = Column(String(50), nullable=True)
+    current_price = Column(Float, nullable=True)
+    volume_amount = Column(BigInteger, nullable=True)  # 거래대금 (BIGINT)
+    high_52w = Column(Float, nullable=True)  # 52주 최고가
+    low_52w = Column(Float, nullable=True)   # 52주 최저가
+    price_position = Column(Float, nullable=True)  # 현재가 / 52주 최고가
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    def __repr__(self) -> str:
+        return f"<StockMaster(symbol={self.symbol}, name={self.name}, volume={self.volume_amount})>"
+
+
+class StockUniverseModel(Base):
+    """전략별 종목 유니버스 테이블"""
+    __tablename__ = "stock_universe"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_type = Column(String(50), nullable=False)  # mean_reversion, momentum
+    symbol = Column(String(20), nullable=False)
+    rank = Column(Integer, nullable=True)
+    score = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    
+    def __repr__(self) -> str:
+        return f"<StockUniverse(strategy={self.strategy_type}, symbol={self.symbol}, rank={self.rank})>"
+
+
+class OHLCModel(Base):
+    """OHLC 데이터 테이블"""
+    __tablename__ = "ohlc_data"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    interval = Column(String(10), nullable=False, index=True)  # 1d, 1m, 5m, etc
+    timestamp = Column(DateTime, nullable=False, index=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    
+    def __repr__(self) -> str:
+        return f"<OHLC(symbol={self.symbol}, interval={self.interval}, timestamp={self.timestamp}, close={self.close})>"
