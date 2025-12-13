@@ -2,7 +2,7 @@
 전략 빌더 API - 노코드 전략 생성 및 관리
 """
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -20,48 +20,48 @@ class Condition(BaseModel):
     """조건"""
     id: str
     type: str  # indicator, price, volume
-    indicator: str = None
+    indicator: Optional[str] = None
     operator: str
     value: Any
-    period: int = None
+    period: Optional[int] = None
 
 
 class StockSelection(BaseModel):
     """종목 선정"""
     # 기본 필터
-    marketCap: Dict[str, float] = None  # 시가총액 (억원)
-    volume: Dict[str, int] = None  # 최소 거래량 (주)
-    volumeValue: Dict[str, float] = None  # 최소 거래대금 (백만원)
-    price: Dict[str, float] = None  # 가격 범위 (원)
+    marketCap: Optional[Dict[str, float]] = None  # 시가총액 (억원)
+    volume: Optional[Dict[str, int]] = None  # 최소 거래량 (주)
+    volumeValue: Optional[Dict[str, float]] = None  # 최소 거래대금 (백만원)
+    price: Optional[Dict[str, float]] = None  # 가격 범위 (원)
     
     # 시장/업종
-    sector: List[str] = None  # 업종
-    market: List[str] = None  # 시장 (KOSPI/KOSDAQ/KONEX)
+    sector: Optional[List[str]] = None  # 업종
+    market: Optional[List[str]] = None  # 시장 (KOSPI/KOSDAQ/KONEX)
     
     # 재무 지표
-    per: Dict[str, float] = None  # PER
-    pbr: Dict[str, float] = None  # PBR
-    roe: Dict[str, float] = None  # ROE (%)
-    debtRatio: Dict[str, float] = None  # 부채비율 (%)
+    per: Optional[Dict[str, float]] = None  # PER
+    pbr: Optional[Dict[str, float]] = None  # PBR
+    roe: Optional[Dict[str, float]] = None  # ROE (%)
+    debtRatio: Optional[Dict[str, float]] = None  # 부채비율 (%)
     
     # 기술적 지표
-    pricePosition: Dict[str, Any] = None  # 52주 최고가/최저가 대비 위치
+    pricePosition: Optional[Dict[str, Any]] = None  # 52주 최고가/최저가 대비 위치
     
     # 제외 조건
-    excludeManaged: bool = None  # 관리종목 제외
-    excludeClearing: bool = None  # 정리매매 제외
-    excludePreferred: bool = None  # 우선주 제외
-    excludeSpac: bool = None  # SPAC 제외
-    minListingDays: int = None  # 최소 상장일수
+    excludeManaged: Optional[bool] = None  # 관리종목 제외
+    excludeClearing: Optional[bool] = None  # 정리매매 제외
+    excludePreferred: Optional[bool] = None  # 우선주 제외
+    excludeSpac: Optional[bool] = None  # SPAC 제외
+    minListingDays: Optional[int] = None  # 최소 상장일수
 
 
 class TrailingStop(BaseModel):
     """트레일링 스탑 설정"""
     enabled: bool = False
     method: str = "atr"  # atr, percentage, parabolic_sar
-    atrMultiple: float = None
-    percentage: float = None
-    activationProfit: float = None
+    atrMultiple: Optional[float] = None
+    percentage: Optional[float] = None
+    activationProfit: Optional[float] = None
     updateFrequency: str = "every_bar"  # every_bar, new_high
 
 
@@ -69,20 +69,20 @@ class StopLoss(BaseModel):
     """손절 설정"""
     enabled: bool = False
     method: str = "fixed"  # fixed, atr, support, time
-    fixedPercent: float = None
-    atrMultiple: float = None
-    minPercent: float = None
-    maxPercent: float = None
-    timeDays: int = None
+    fixedPercent: Optional[float] = None
+    atrMultiple: Optional[float] = None
+    minPercent: Optional[float] = None
+    maxPercent: Optional[float] = None
+    timeDays: Optional[int] = None
 
 
 class TakeProfit(BaseModel):
     """익절 설정"""
     enabled: bool = False
     method: str = "fixed"  # fixed, r_multiple, partial
-    fixedPercent: float = None
-    rMultiple: float = None
-    partialLevels: list = None
+    fixedPercent: Optional[float] = None
+    rMultiple: Optional[float] = None
+    partialLevels: Optional[list] = None
 
 
 class PositionManagement(BaseModel):
@@ -90,52 +90,53 @@ class PositionManagement(BaseModel):
     sizingMethod: str = "fixed"  # fixed, atr_risk, kelly, volatility
     
     # 고정 비율
-    positionSize: float = None
+    positionSize: Optional[float] = None
     
     # ATR 기반
-    accountRisk: float = None
-    atrPeriod: int = None
-    atrMultiple: float = None
+    accountRisk: Optional[float] = None
+    atrPeriod: Optional[int] = None
+    atrMultiple: Optional[float] = None
     
     # 켈리 공식
-    winRate: float = None
-    winLossRatio: float = None
-    kellyFraction: float = None
+    winRate: Optional[float] = None
+    winLossRatio: Optional[float] = None
+    kellyFraction: Optional[float] = None
     
     # 변동성 기반
-    volatilityPeriod: int = None
-    volatilityTarget: float = None
+    volatilityPeriod: Optional[int] = None
+    volatilityTarget: Optional[float] = None
     
     maxPositions: int
     
     # 손절/익절
-    stopLoss: StopLoss = None
-    takeProfit: TakeProfit = None
+    stopLoss: Optional[StopLoss] = None
+    takeProfit: Optional[TakeProfit] = None
     
     # 트레일링 스탑
-    trailingStop: TrailingStop = None
+    trailingStop: Optional[TrailingStop] = None
 
 
 class PyramidLevel(BaseModel):
     """피라미딩 레벨"""
     level: int
     condition: str  # initial, price_increase, indicator
-    priceChange: float = None  # %
+    priceChange: Optional[float] = None  # %
     units: float  # 유닛 수
-    description: str = None
+    description: Optional[str] = None
 
 
 class EntryStrategy(BaseModel):
     """진입 전략"""
     type: str = "single"  # single, pyramid
-    pyramidLevels: List[PyramidLevel] = None
-    maxLevels: int = None
-    maxPositionSize: float = None  # %
-    minInterval: int = None  # 일
+    pyramidLevels: Optional[List[PyramidLevel]] = None
+    maxLevels: Optional[int] = None
+    maxPositionSize: Optional[float] = None  # %
+    minInterval: Optional[int] = None  # 일
 
 
 class StrategyBuilderRequest(BaseModel):
     """전략 빌더 요청"""
+    strategy_id: int = None  # 수정 시 전략 ID
     name: str
     description: str
     stockSelection: StockSelection
@@ -178,21 +179,40 @@ async def save_strategy(
         # Python 코드 생성
         python_code = generate_strategy_code(request)
         
-        # DB에 저장
-        strategy = StrategyBuilderModel(
-            user_id=current_user["user_id"],
-            name=request.name,
-            description=request.description,
-            config=request.dict(),
-            python_code=python_code,
-            is_active=True
-        )
+        # 수정 모드인지 확인
+        if request.strategy_id:
+            # 기존 전략 업데이트
+            strategy = db.query(StrategyBuilderModel).filter(
+                StrategyBuilderModel.id == request.strategy_id,
+                StrategyBuilderModel.user_id == current_user["user_id"]
+            ).first()
+            
+            if not strategy:
+                raise HTTPException(status_code=404, detail="Strategy not found")
+            
+            strategy.name = request.name
+            strategy.description = request.description
+            strategy.config = request.dict()
+            strategy.python_code = python_code
+            strategy.updated_at = datetime.now()
+            
+            logger.info(f"Strategy updated: ID={strategy.id}, Name={request.name}, User={current_user['username']}")
+        else:
+            # 새 전략 생성
+            strategy = StrategyBuilderModel(
+                user_id=current_user["user_id"],
+                name=request.name,
+                description=request.description,
+                config=request.dict(),
+                python_code=python_code,
+                is_active=True
+            )
+            
+            db.add(strategy)
+            logger.info(f"Strategy created: Name={request.name}, User={current_user['username']}")
         
-        db.add(strategy)
         db.commit()
         db.refresh(strategy)
-        
-        logger.info(f"Strategy saved: ID={strategy.id}, Name={request.name}, User={current_user['username']}")
         
         return StrategyBuilderResponse(
             strategy_id=strategy.id,
@@ -363,6 +383,56 @@ async def get_available_indicators():
             "parameters": [],
             "operators": ["cloud_above", "cloud_below", "cross_above", "cross_below"],
             "description": "일목균형표 (전환선/기준선/구름)"
+        },
+        {
+            "id": "bos",
+            "name": "BOS (Break of Structure)",
+            "category": "ict",
+            "parameters": [
+                {"name": "lookback", "type": "number", "default": 20, "min": 5, "max": 100}
+            ],
+            "operators": [">", "<", "break_high", "break_low"],
+            "description": "ICT 구조적 돌파 - 이전 고점/저점 돌파"
+        },
+        {
+            "id": "fvg",
+            "name": "Fair Value Gap",
+            "category": "ict",
+            "parameters": [
+                {"name": "min_gap", "type": "number", "default": 0.002, "min": 0.001, "max": 0.01, "step": 0.001}
+            ],
+            "operators": ["in_gap", "above_gap", "below_gap"],
+            "description": "ICT 공정가치 갭 - 가격 공백 구간"
+        },
+        {
+            "id": "order_block",
+            "name": "Order Block",
+            "category": "ict",
+            "parameters": [
+                {"name": "volume_multiplier", "type": "number", "default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}
+            ],
+            "operators": ["in_block", "above_block", "below_block"],
+            "description": "ICT 주문 블록 - 기관 주문 집중 구간"
+        },
+        {
+            "id": "liquidity_pool",
+            "name": "Liquidity Pool",
+            "category": "ict",
+            "parameters": [
+                {"name": "cluster_threshold", "type": "number", "default": 0.015, "min": 0.005, "max": 0.05, "step": 0.005}
+            ],
+            "operators": ["near_pool", "sweep_pool"],
+            "description": "ICT 유동성 풀 - 고점/저점 클러스터"
+        },
+        {
+            "id": "smart_money",
+            "name": "Smart Money Flow",
+            "category": "ict",
+            "parameters": [
+                {"name": "period", "type": "number", "default": 20, "min": 5, "max": 50}
+            ],
+            "operators": [">", "<", "bullish", "bearish"],
+            "description": "ICT 스마트머니 흐름 - 기관투자자 동향"
         }
     ]
     
@@ -372,7 +442,8 @@ async def get_available_indicators():
             {"id": "trend", "name": "추세", "description": "추세 방향과 강도를 측정"},
             {"id": "momentum", "name": "모멘텀", "description": "가격 변화의 속도와 강도를 측정"},
             {"id": "volatility", "name": "변동성", "description": "가격 변동의 크기를 측정"},
-            {"id": "volume", "name": "거래량", "description": "거래량 기반 지표"}
+            {"id": "volume", "name": "거래량", "description": "거래량 기반 지표"},
+            {"id": "ict", "name": "🎯 ICT 이론", "description": "Inner Circle Trader 기법 - Smart Money Concepts"}
         ]
     }
 
@@ -400,15 +471,27 @@ async def list_strategies(
             StrategyBuilderModel.is_active == True
         ).order_by(StrategyBuilderModel.created_at.desc()).all()
         
-        return [
-            {
+        result = []
+        for s in strategies:
+            is_portfolio = False
+            try:
+                # config에서 stockSelection 추출
+                stock_selection_data = s.config.get('stockSelection', {})
+                if stock_selection_data:
+                    stock_selection = StockSelection(**stock_selection_data)
+                    is_portfolio = _has_stock_selection_criteria(stock_selection)
+            except Exception as e:
+                logger.warning(f"Failed to check portfolio status for strategy {s.id}: {e}")
+            
+            result.append({
                 "strategy_id": s.id,
                 "name": s.name,
                 "description": s.description,
                 "created_at": s.created_at,
-            }
-            for s in strategies
-        ]
+                "is_portfolio": is_portfolio,
+            })
+        
+        return result
     
     except Exception as e:
         logger.error(f"Failed to list strategies: {e}")
@@ -503,6 +586,414 @@ async def delete_strategy(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _generate_condition_code(condition: Condition, index: int, condition_type: str) -> str:
+    """
+    개별 조건을 Python 코드로 변환
+    
+    Args:
+        condition: 조건 객체
+        index: 조건 인덱스
+        condition_type: 'buy' 또는 'sell'
+        
+    Returns:
+        Python 코드 문자열
+    """
+    if not condition.indicator:
+        return ""
+    
+    # 지표별 코드 생성
+    if condition.indicator == "ma":
+        # 이동평균
+        period = getattr(condition, 'period', 20)
+        
+        # 비교 대상 결정
+        if isinstance(condition.value, str):
+            if condition.value == 'close':
+                compare_value = "current_price"
+            elif condition.value == 'open':
+                compare_value = "bars['open'].iloc[-1]"
+            elif condition.value == 'high':
+                compare_value = "bars['high'].iloc[-1]"
+            elif condition.value == 'low':
+                compare_value = "bars['low'].iloc[-1]"
+            elif condition.value.startswith('MA('):
+                # 다른 이동평균과 비교
+                other_period = condition.value.replace('MA(', '').replace(')', '')
+                compare_value = f"sum(closes[-{other_period}:]) / {other_period}"
+            elif condition.value.startswith('EMA('):
+                # 지수이동평균과 비교 (간단 근사)
+                other_period = condition.value.replace('EMA(', '').replace(')', '')
+                compare_value = f"_calculate_ema(closes, {other_period})"
+            elif condition.value.startswith('RSI('):
+                # RSI와 비교
+                other_period = condition.value.replace('RSI(', '').replace(')', '')
+                compare_value = f"_calculate_rsi(closes, {other_period})"
+            else:
+                compare_value = str(condition.value)
+        else:
+            compare_value = str(condition.value)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: MA({period}) {condition.operator} {condition.value}\n"
+                f"        ma_{index} = sum(closes[-{period}:]) / {period}\n"
+                f"        if not (ma_{index} {condition.operator} {compare_value}):\n"
+                f"            return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: MA({period}) {condition.operator} {condition.value}\n"
+                f"        ma_{index} = sum(closes[-{period}:]) / {period}\n"
+                f"        if ma_{index} {condition.operator} {compare_value}:\n"
+                f"            should_sell = True"
+            )
+    
+    elif condition.indicator == "rsi":
+        # RSI
+        period = getattr(condition, 'period', 14)
+        
+        # 비교 대상 결정
+        if isinstance(condition.value, str):
+            if condition.value == 'close':
+                compare_value = "current_price"
+            elif condition.value.startswith('RSI('):
+                other_period = condition.value.replace('RSI(', '').replace(')', '')
+                compare_value = f"_calculate_rsi(closes, {other_period})"
+            else:
+                compare_value = str(condition.value)
+        else:
+            compare_value = str(condition.value)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: RSI({period}) {condition.operator} {condition.value}\n"
+                f"        rsi_{index} = _calculate_rsi(closes, {period})\n"
+                f"        if not (rsi_{index} {condition.operator} {compare_value}):\n"
+                f"            return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: RSI({period}) {condition.operator} {condition.value}\n"
+                f"        rsi_{index} = _calculate_rsi(closes, {period})\n"
+                f"        if rsi_{index} {condition.operator} {compare_value}:\n"
+                f"            should_sell = True"
+            )
+    
+    elif condition.indicator == "volume_ma":
+        # 거래량 이동평균
+        period = getattr(condition, 'period', 20)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: 거래량 > 거래량 MA({period})\n"
+                f"        volume_ma_{index} = sum(bars['volume'].iloc[-{period}:]) / {period}\n"
+                f"        current_volume = bars['volume'].iloc[-1]\n"
+                f"        if not (current_volume > volume_ma_{index}):\n"
+                f"            return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: 거래량 < 거래량 MA({period})\n"
+                f"        volume_ma_{index} = sum(bars['volume'].iloc[-{period}:]) / {period}\n"
+                f"        current_volume = bars['volume'].iloc[-1]\n"
+                f"        if current_volume < volume_ma_{index}:\n"
+                f"            should_sell = True"
+            )
+    
+    elif condition.indicator == "bos":
+        # Break of Structure
+        lookback = getattr(condition, 'lookback', 20)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: BOS 상승 돌파 확인\n"
+                f"        recent_high = bars['high'].tail({lookback}).max()\n"
+                f"        if not (current_price > recent_high * 1.001):  # 0.1% 여유\n"
+                f"            return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: BOS 하락 돌파 확인\n"
+                f"        recent_low = bars['low'].tail({lookback}).min()\n"
+                f"        if current_price < recent_low * 0.999:  # 0.1% 여유\n"
+                f"            should_sell = True"
+            )
+    
+    elif condition.indicator == "smart_money":
+        # Smart Money Flow
+        period = getattr(condition, 'period', 20)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: Smart Money 상승 흐름\n"
+                f"        volume_ma = bars['volume'].tail({period}).mean()\n"
+                f"        current_volume = bars['volume'].iloc[-1]\n"
+                f"        rsi_val = _calculate_rsi(closes, 14)\n"
+                f"        # 높은 거래량 + 상승 모멘텀\n"
+                f"        if not (current_volume > volume_ma * 1.5 and rsi_val > 50):\n"
+                f"            return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: Smart Money 하락 흐름\n"
+                f"        volume_ma = bars['volume'].tail({period}).mean()\n"
+                f"        current_volume = bars['volume'].iloc[-1]\n"
+                f"        rsi_val = _calculate_rsi(closes, 14)\n"
+                f"        # 높은 거래량 + 하락 모멘텀\n"
+                f"        if current_volume > volume_ma * 1.5 and rsi_val < 50:\n"
+                f"            should_sell = True"
+            )
+    
+    elif condition.indicator == "fvg":
+        # Fair Value Gap
+        min_gap = getattr(condition, 'min_gap', 0.002)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: Fair Value Gap 상승 진입\n"
+                f"        # 3봉 패턴으로 FVG 감지\n"
+                f"        if len(bars) >= 3:\n"
+                f"            prev_high = bars['high'].iloc[-3]\n"
+                f"            next_low = bars['low'].iloc[-1]\n"
+                f"            gap_size = (next_low - prev_high) / prev_high\n"
+                f"            # Bullish FVG: 이전 고점 < 현재 저점\n"
+                f"            if not (prev_high < next_low and gap_size >= {min_gap}):\n"
+                f"                return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: Fair Value Gap 하락 진입\n"
+                f"        if len(bars) >= 3:\n"
+                f"            prev_low = bars['low'].iloc[-3]\n"
+                f"            next_high = bars['high'].iloc[-1]\n"
+                f"            gap_size = (prev_low - next_high) / next_high\n"
+                f"            # Bearish FVG: 이전 저점 > 현재 고점\n"
+                f"            if prev_low > next_high and gap_size >= {min_gap}:\n"
+                f"                should_sell = True"
+            )
+    
+    elif condition.indicator == "order_block":
+        # Order Block
+        volume_multiplier = getattr(condition, 'volume_multiplier', 1.5)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: Order Block 상승 리테스트\n"
+                f"        # 높은 거래량 + 큰 몸통 확인\n"
+                f"        if len(bars) >= 20:\n"
+                f"            avg_volume = bars['volume'].tail(20).mean()\n"
+                f"            current_volume = bars['volume'].iloc[-1]\n"
+                f"            body_size = abs(bars['close'].iloc[-1] - bars['open'].iloc[-1]) / bars['open'].iloc[-1]\n"
+                f"            # Order Block 조건: 높은 거래량 + 2% 이상 몸통\n"
+                f"            if not (current_volume > avg_volume * {volume_multiplier} and body_size > 0.02):\n"
+                f"                return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: Order Block 하락 리테스트\n"
+                f"        if len(bars) >= 20:\n"
+                f"            avg_volume = bars['volume'].tail(20).mean()\n"
+                f"            current_volume = bars['volume'].iloc[-1]\n"
+                f"            body_size = abs(bars['close'].iloc[-1] - bars['open'].iloc[-1]) / bars['open'].iloc[-1]\n"
+                f"            # Bearish Order Block\n"
+                f"            if (current_volume > avg_volume * {volume_multiplier} and \n"
+                f"                body_size > 0.02 and bars['close'].iloc[-1] < bars['open'].iloc[-1]):\n"
+                f"                should_sell = True"
+            )
+    
+    elif condition.indicator == "liquidity_pool":
+        # Liquidity Pool
+        cluster_threshold = getattr(condition, 'cluster_threshold', 0.015)
+        
+        if condition_type == "buy":
+            return (
+                f"        # 조건 {index+1}: Liquidity Pool 지지선 테스트\n"
+                f"        # 최근 저점들의 클러스터 확인\n"
+                f"        if len(bars) >= 50:\n"
+                f"            recent_lows = bars['low'].tail(50)\n"
+                f"            # 현재가 근처의 저점 클러스터 찾기\n"
+                f"            nearby_lows = [low for low in recent_lows if abs(current_price - low) / low <= {cluster_threshold}]\n"
+                f"            # 3개 이상의 저점이 근처에 있으면 유동성 풀\n"
+                f"            if not (len(nearby_lows) >= 3):\n"
+                f"                return signals"
+            )
+        else:  # sell
+            return (
+                f"        # 조건 {index+1}: Liquidity Pool 저항선 테스트\n"
+                f"        if len(bars) >= 50:\n"
+                f"            recent_highs = bars['high'].tail(50)\n"
+                f"            nearby_highs = [high for high in recent_highs if abs(current_price - high) / high <= {cluster_threshold}]\n"
+                f"            # 고점 클러스터에서 저항 확인\n"
+                f"            if len(nearby_highs) >= 3:\n"
+                f"                should_sell = True"
+            )
+    
+    # 기본 처리 (기존 방식)
+    return ""
+
+
+def _has_stock_selection_criteria(stock_selection: StockSelection) -> bool:
+    """
+    종목 선정 조건이 있는지 확인
+    
+    Args:
+        stock_selection: 종목 선정 조건
+        
+    Returns:
+        조건이 있으면 True
+    """
+    # 기본 필터
+    if stock_selection.marketCap and (stock_selection.marketCap.get('min') or stock_selection.marketCap.get('max')):
+        return True
+    if stock_selection.volume and stock_selection.volume.get('min'):
+        return True
+    if stock_selection.volumeValue and stock_selection.volumeValue.get('min'):
+        return True
+    if stock_selection.price and (stock_selection.price.get('min') or stock_selection.price.get('max')):
+        return True
+    
+    # 시장/업종
+    if stock_selection.sector and len(stock_selection.sector) > 0:
+        return True
+    if stock_selection.market and len(stock_selection.market) > 0:
+        return True
+    
+    # 재무 지표
+    if stock_selection.per and (stock_selection.per.get('min') or stock_selection.per.get('max')):
+        return True
+    if stock_selection.pbr and (stock_selection.pbr.get('min') or stock_selection.pbr.get('max')):
+        return True
+    if stock_selection.roe and stock_selection.roe.get('min'):
+        return True
+    if stock_selection.debtRatio and stock_selection.debtRatio.get('max'):
+        return True
+    
+    # 기술적 지표
+    if stock_selection.pricePosition:
+        if stock_selection.pricePosition.get('from52WeekHigh'):
+            return True
+        if stock_selection.pricePosition.get('from52WeekLow'):
+            return True
+    
+    return False
+
+
+def _generate_select_universe_method(stock_selection: StockSelection) -> str:
+    """
+    select_universe() 메서드 코드 생성
+    
+    Args:
+        stock_selection: 종목 선정 조건
+        
+    Returns:
+        Python 코드
+    """
+    conditions = []
+    
+    # 시가총액 (DB는 백만원 단위, 입력은 억원 단위)
+    if stock_selection.marketCap:
+        if stock_selection.marketCap.get('min'):
+            conditions.append(f"StockMasterModel.market_cap >= {stock_selection.marketCap['min'] * 100}")
+        if stock_selection.marketCap.get('max'):
+            conditions.append(f"StockMasterModel.market_cap <= {stock_selection.marketCap['max'] * 100}")
+    
+    # 거래량
+    if stock_selection.volume and stock_selection.volume.get('min'):
+        conditions.append(f"StockMasterModel.volume_amount >= {stock_selection.volume['min']}")
+    
+    # 거래대금 (DB는 원 단위, 입력은 억원 단위)
+    if stock_selection.volumeValue and stock_selection.volumeValue.get('min'):
+        conditions.append(f"StockMasterModel.volume_amount >= {stock_selection.volumeValue['min'] * 100_000_000}")
+    
+    # 가격
+    if stock_selection.price:
+        if stock_selection.price.get('min'):
+            conditions.append(f"StockMasterModel.current_price >= {stock_selection.price['min']}")
+        if stock_selection.price.get('max'):
+            conditions.append(f"StockMasterModel.current_price <= {stock_selection.price['max']}")
+    
+    # 시장
+    if stock_selection.market and len(stock_selection.market) > 0:
+        markets_str = ", ".join([f"'{m}'" for m in stock_selection.market])
+        conditions.append(f"StockMasterModel.market.in_([{markets_str}])")
+    
+    # PER
+    if stock_selection.per:
+        if stock_selection.per.get('min'):
+            conditions.append(f"StockMasterModel.per >= {stock_selection.per['min']}")
+        if stock_selection.per.get('max'):
+            conditions.append(f"StockMasterModel.per <= {stock_selection.per['max']}")
+    
+    # PBR
+    if stock_selection.pbr:
+        if stock_selection.pbr.get('min'):
+            conditions.append(f"StockMasterModel.pbr >= {stock_selection.pbr['min']}")
+        if stock_selection.pbr.get('max'):
+            conditions.append(f"StockMasterModel.pbr <= {stock_selection.pbr['max']}")
+    
+    # ROE
+    if stock_selection.roe and stock_selection.roe.get('min'):
+        conditions.append(f"StockMasterModel.roe >= {stock_selection.roe['min']}")
+    
+    # 52주 위치
+    if stock_selection.pricePosition:
+        if stock_selection.pricePosition.get('from52WeekHigh'):
+            pos = stock_selection.pricePosition['from52WeekHigh']
+            if pos.get('min'):
+                conditions.append(f"StockMasterModel.price_position >= {pos['min'] / 100}")
+            if pos.get('max'):
+                conditions.append(f"StockMasterModel.price_position <= {pos['max'] / 100}")
+    
+    # 제외 조건
+    if stock_selection.excludeManaged:
+        conditions.append("StockMasterModel.is_active == True")
+    
+    # 조건 문자열 생성 - 각 filter를 별도 라인으로
+    filter_lines = []
+    for cond in conditions:
+        filter_lines.append(f"            query = query.filter({cond})")
+    filter_conditions = "\n".join(filter_lines)
+    
+    code = f'''
+    def select_universe(self, date: datetime, repository) -> List[str]:
+        """
+        종목 유니버스 선정
+        
+        Args:
+            date: 기준일
+            repository: 데이터 저장소
+            
+        Returns:
+            종목 코드 리스트
+        """
+        from data.models import StockMasterModel
+        from data.repository import get_db_session
+        
+        db = get_db_session()
+        
+        try:
+            # 종목 선정 조건
+            query = db.query(StockMasterModel.symbol)
+{filter_conditions}
+            
+            # 최대 종목 수 제한
+            max_stocks = self.get_param("max_positions", {stock_selection.market and len(stock_selection.market) * 20 or 50})
+            
+            # PER 기준 정렬 (낮은 순)
+            if hasattr(StockMasterModel, 'per'):
+                query = query.filter(StockMasterModel.per.isnot(None))
+                query = query.order_by(StockMasterModel.per.asc())
+            
+            symbols = [row.symbol for row in query.limit(max_stocks).all()]
+            
+            return symbols
+        finally:
+            db.close()
+'''
+    
+    return code
+
+
 def generate_strategy_code(request: StrategyBuilderRequest) -> str:
     """
     전략 설정을 Python 코드로 변환
@@ -523,8 +1014,16 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
     if class_name[0].isdigit():
         class_name = "Strategy_" + class_name
     
+    # 종목 선정 조건이 있는지 확인 (포트폴리오 전략 여부)
+    has_stock_selection = _has_stock_selection_criteria(request.stockSelection)
+    is_portfolio_strategy = has_stock_selection
+    
     # 설명에서 따옴표 이스케이프
     description = request.description.replace('"', '\\"').replace("'", "\\'") if request.description else ""
+    
+    # 종목 선정 조건 확인 (포트폴리오 전략 여부)
+    has_stock_selection = _has_stock_selection_criteria(request.stockSelection)
+    is_portfolio_strategy = has_stock_selection
     
     # stop_loss와 take_profit을 딕셔너리로 변환
     stop_loss_dict = {}
@@ -544,27 +1043,24 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
     take_profit_str = repr(take_profit_dict)
     trailing_stop_str = repr(trailing_stop_dict)
     
+    # select_universe 메서드 생성 (포트폴리오 전략인 경우)
+    select_universe_method = ""
+    if is_portfolio_strategy:
+        select_universe_method = _generate_select_universe_method(request.stockSelection)
+    
     # 매수 조건 코드 생성
     buy_conditions_code = []
     for i, cond in enumerate(request.buyConditions):
-        if cond.indicator == "MA":
-            buy_conditions_code.append(
-                f"        # 조건 {i+1}: MA({cond.period}) {cond.operator} {cond.value}\n"
-                f"        ma_{i} = sum(closes[-{cond.period}:]) / {cond.period}\n"
-                f"        if not (ma_{i} {cond.operator} {cond.value}):\n"
-                f"            return signals"
-            )
+        condition_code = _generate_condition_code(cond, i, "buy")
+        if condition_code:
+            buy_conditions_code.append(condition_code)
     
     # 매도 조건 코드 생성
     sell_conditions_code = []
     for i, cond in enumerate(request.sellConditions):
-        if cond.indicator == "MA":
-            sell_conditions_code.append(
-                f"        # 조건 {i+1}: MA({cond.period}) {cond.operator} {cond.value}\n"
-                f"        ma_{i} = sum(closes[-{cond.period}:]) / {cond.period}\n"
-                f"        if ma_{i} {cond.operator} {cond.value}:\n"
-                f"            should_sell = True"
-            )
+        condition_code = _generate_condition_code(cond, i, "sell")
+        if condition_code:
+            sell_conditions_code.append(condition_code)
     
     code = f'''"""
 {request.name}
@@ -574,6 +1070,7 @@ def generate_strategy_code(request: StrategyBuilderRequest) -> str:
 자동 생성된 전략 - 전략 빌더
 """
 from typing import List
+from datetime import datetime
 import pandas as pd
 from core.strategy.base import BaseStrategy
 from core.strategy.registry import strategy
@@ -676,6 +1173,7 @@ class {class_name}(BaseStrategy):
     """
     {request.name}
     
+    {'포트폴리오 전략 (종목 자동 선정)' if is_portfolio_strategy else '단일 종목 전략'}
     매수 조건: {len(request.buyConditions)}개
     매도 조건: {len(request.sellConditions)}개
     """
@@ -730,7 +1228,7 @@ class {class_name}(BaseStrategy):
         # 트레일링 스탑 상태 추적
         self.highest_price = {{}}  # symbol: highest_price
         self.trailing_stop_price = {{}}  # symbol: stop_price
-    
+    {select_universe_method if is_portfolio_strategy else ""}
     def on_bar(self, bars: pd.DataFrame, positions: List[Position], account: Account) -> List[OrderSignal]:
         """
         새로운 바마다 호출
@@ -760,7 +1258,8 @@ class {class_name}(BaseStrategy):
         if self.entry_type == "single":
             # 일괄 진입
             if not position and len(positions) < self.max_positions:
-{chr(10).join(buy_conditions_code) if buy_conditions_code else "                pass"}
+                # 매수 조건 확인
+{chr(10).join(buy_conditions_code) if buy_conditions_code else "                # 조건 없음"}
                 
                 # 모든 매수 조건 만족 시 매수
                 quantity = self._calculate_quantity(account.equity, current_price, bars)
@@ -779,7 +1278,8 @@ class {class_name}(BaseStrategy):
             
             # 1차 진입 (초기 진입)
             if symbol not in self.entry_price:
-{chr(10).join(buy_conditions_code) if buy_conditions_code else "                pass"}
+                # 매수 조건 확인
+{chr(10).join(buy_conditions_code) if buy_conditions_code else "                # 조건 없음"}
                 
                 # 매수 조건 만족 시 1차 진입
                 if len(positions) < self.max_positions:
@@ -905,7 +1405,8 @@ class {class_name}(BaseStrategy):
                 if pnl_pct >= (self.take_profit_percent / 100):
                     should_sell = True
             
-{chr(10).join(sell_conditions_code) if sell_conditions_code else "            pass"}
+            # 추가 매도 조건
+{chr(10).join(sell_conditions_code) if sell_conditions_code else "            # 조건 없음"}
             
             if should_sell:
                 # 매도 시 상태 초기화
@@ -1021,6 +1522,50 @@ class {class_name}(BaseStrategy):
             quantity = int(position_value / price)
         
         return max(1, quantity)  # 최소 1주
+    
+    def _calculate_ema(self, prices: list, period: int) -> float:
+        """지수이동평균 계산"""
+        if len(prices) < period:
+            return sum(prices) / len(prices)
+        
+        multiplier = 2 / (period + 1)
+        ema = sum(prices[:period]) / period  # 초기 SMA
+        
+        for price in prices[period:]:
+            ema = (price * multiplier) + (ema * (1 - multiplier))
+        
+        return ema
+    
+    def _calculate_rsi(self, prices: list, period: int = 14) -> float:
+        """RSI 계산"""
+        if len(prices) < period + 1:
+            return 50.0  # 기본값
+        
+        gains = []
+        losses = []
+        
+        for i in range(1, len(prices)):
+            change = prices[i] - prices[i-1]
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+        
+        if len(gains) < period:
+            return 50.0
+        
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
 '''
     
     return code

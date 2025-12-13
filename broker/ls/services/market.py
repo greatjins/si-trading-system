@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from broker.ls.client import LSClient
-from broker.ls.models.market import LSOHLC, LSQuote, LSOrderbook
+from broker.ls.models.market import LSOHLC, LSQuote, LSOrderbook, LSFinancialInfo
 from utils.logger import setup_logger
 from utils.types import OHLC
 
@@ -451,4 +451,223 @@ class LSMarketService:
         
         except Exception as e:
             logger.error(f"Failed to get top volume stocks: {e}")
+            raise
+    
+    async def get_top_change_rate_stocks(
+        self,
+        gubun1: str = "0",      # 0:전체, 1:코스피, 2:코스닥
+        gubun2: str = "0",      # 0:상승률, 1:하락률, 2:보합
+        gubun3: str = "0",      # 0:당일, 1:전일
+        count: int = 200
+    ) -> List[dict]:
+        """
+        등락율 상위 종목 조회 (t1441 - 등락율상위)
+        
+        Args:
+            gubun1: 시장 구분 (0:전체, 1:코스피, 2:코스닥)
+            gubun2: 상승하락 구분 (0:상승률, 1:하락률, 2:보합)
+            gubun3: 당일전일 구분 (0:당일, 1:전일)
+            count: 조회 개수 (연속조회로 최대 500개까지 가능)
+            
+        Returns:
+            종목 목록 [{"symbol": "005930", "name": "삼성전자", "change_rate": 5.5}]
+        """
+        try:
+            logger.info(f"Fetching top {count} change rate stocks (gubun1={gubun1}, gubun2={gubun2}, gubun3={gubun3})")
+            
+            stocks = []
+            idx = 0  # 처음 조회시는 0
+            tr_cont_key = ""
+            
+            # 연속조회로 원하는 개수만큼 가져오기
+            while len(stocks) < count:
+                # LS증권 등락율상위 API (t1441)
+                # jc_num: 대상제외값 (비트 OR 연산)
+                # - 거래정지: 0x00000200 (512)
+                # - 정리매매: 0x01000000 (16777216)
+                # - 불성실공시: 0x80000000 (2147483648)
+                jc_num = 512 + 16777216 + 2147483648  # = 2164260928
+                
+                # jc_num2: 대상제외2
+                # - 상장지수펀드(ETF): 1
+                # - 선박투자회사: 2
+                # - 스펙: 4
+                # - ETN: 8
+                jc_num2 = 1 + 2 + 4 + 8  # = 15
+                
+                response = await self.client.request(
+                    method="POST",
+                    endpoint="/stock/high-item",
+                    data={
+                        "t1441InBlock": {
+                            "gubun1": gubun1,      # 0:전체, 1:코스피, 2:코스닥
+                            "gubun2": gubun2,      # 0:상승률, 1:하락률, 2:보합
+                            "gubun3": gubun3,      # 0:당일, 1:전일
+                            "jc_num": jc_num,      # 대상제외
+                            "sprice": 0,           # 시작가격 (현재가 >= sprice)
+                            "eprice": 0,           # 종료가격 (현재가 <= eprice)
+                            "volume": 0,           # 거래량 (거래량 >= volume)
+                            "idx": int(idx),       # 숫자 타입으로 변환
+                            "jc_num2": jc_num2,    # 대상제외2
+                            "exchgubun": "U"       # K:KRX, N:NXT, U:통합
+                        }
+                    },
+                    headers={
+                        "content-type": "application/json; charset=utf-8",
+                        "tr_cd": "t1441",
+                        "tr_cont": "Y" if idx > 0 else "N",  # 연속거래 여부
+                        "tr_cont_key": tr_cont_key,          # 연속거래 Key
+                        "custtype": "P"
+                    }
+                )
+                
+                # 종목 리스트 파싱
+                items = response.get("t1441OutBlock1", [])
+                if not items:
+                    logger.info(f"No more data available. Total fetched: {len(stocks)}")
+                    break
+                
+                for item in items:
+                    if len(stocks) >= count:
+                        break
+                    
+                    stocks.append({
+                        "symbol": item.get("shcode", ""),
+                        "name": item.get("hname", ""),
+                        "price": float(item.get("price", 0)),
+                        "sign": item.get("sign", ""),
+                        "change": float(item.get("change", 0)),
+                        "change_rate": float(item.get("diff", 0)),  # 등락율 (diff)
+                        "volume": int(item.get("volume", 0)),
+                        "volume_amount": int(item.get("value", 0)),  # 거래대금
+                        "open": float(item.get("open", 0)),
+                        "high": float(item.get("high", 0)),
+                        "low": float(item.get("low", 0)),
+                        "offer_ho1": float(item.get("offerho1", 0)),  # 매도호가
+                        "bid_ho1": float(item.get("bidho1", 0)),      # 매수호가
+                        "jnildiff": float(item.get("jnildiff", 0)),   # 전일등락율
+                        "market_cap": int(item.get("total", 0))       # 시가총액
+                    })
+                
+                # 다음 페이지 인덱스 (OutBlock에서 가져오기)
+                out_block = response.get("t1441OutBlock", {})
+                next_idx = int(out_block.get("idx", 0))
+                
+                # 연속키 업데이트 (응답 헤더에서 가져오기)
+                # 실제 응답 구조에 따라 조정 필요
+                tr_cont_key = response.get("tr_cont_key", "")
+                
+                if next_idx == 0 or next_idx == idx:
+                    logger.info(f"No more pages. Total fetched: {len(stocks)}")
+                    break
+                
+                idx = next_idx
+                logger.info(f"Fetched {len(stocks)} stocks so far, continuing...")
+                
+                # Rate Limit
+                await asyncio.sleep(1.1)
+            
+            logger.info(f"Fetched {len(stocks)} top change rate stocks")
+            return stocks
+        
+        except Exception as e:
+            logger.error(f"Failed to get top change rate stocks: {e}")
+            raise
+    
+    async def get_financial_info(self, symbol: str) -> LSFinancialInfo:
+        """
+        종목 재무 정보 조회 (t3320 - FNG_요약)
+        
+        Args:
+            symbol: 종목 코드 (6자리)
+            
+        Returns:
+            재무 정보
+        """
+        try:
+            logger.info(f"Fetching financial info for {symbol}")
+            
+            # 종목코드는 6자리 (A 접두사 없이)
+            # 문서 샘플: "001200" (6자리)
+            gicode = symbol if len(symbol) == 6 else symbol[1:]
+            
+            # LS증권 재무정보 조회 API (t3320)
+            # 엔드포인트: /stock/investinfo (투자정보)
+            response = await self.client.request(
+                method="POST",
+                endpoint="/stock/investinfo",
+                data={
+                    "t3320InBlock": {
+                        "gicode": gicode
+                    }
+                },
+                headers={
+                    "content-type": "application/json; charset=utf-8",
+                    "tr_cd": "t3320",
+                    "tr_cont": "N",
+                    "tr_cont_key": "",
+                    "custtype": "P",
+                    "mac_address": ""
+                }
+            )
+            
+            # 기본 정보 파싱
+            out_block = response.get("t3320OutBlock", {})
+            
+            # 재무 지표 파싱
+            out_block1 = response.get("t3320OutBlock1", {})
+            
+            financial_info = LSFinancialInfo(
+                symbol=symbol,
+                company=out_block.get("company", ""),
+                market=out_block.get("sijangcd", ""),
+                market_name=out_block.get("marketnm", ""),
+                
+                # 주식 정보
+                price=float(out_block.get("price", 0)),
+                prev_close=float(out_block.get("jnilclose", 0)),
+                market_cap=float(out_block.get("sigavalue", 0)),
+                shares=float(out_block.get("gstock", 0)),
+                capital=float(out_block.get("capital", 0)),
+                par_value=float(out_block.get("lstprice", 0)),
+                
+                # 재무 지표
+                per=float(out_block1.get("per", 0)) if out_block1.get("per") else None,
+                eps=float(out_block1.get("eps", 0)) if out_block1.get("eps") else None,
+                pbr=float(out_block1.get("pbr", 0)) if out_block1.get("pbr") else None,
+                bps=float(out_block1.get("bps", 0)) if out_block1.get("bps") else None,
+                roa=float(out_block1.get("roa", 0)) if out_block1.get("roa") else None,
+                roe=float(out_block1.get("roe", 0)) if out_block1.get("roe") else None,
+                
+                # 추가 지표
+                sps=float(out_block1.get("sps", 0)) if out_block1.get("sps") else None,
+                cps=float(out_block1.get("cps", 0)) if out_block1.get("cps") else None,
+                ebitda=float(out_block1.get("ebitda", 0)) if out_block1.get("ebitda") else None,
+                ev_ebitda=float(out_block1.get("evebitda", 0)) if out_block1.get("evebitda") else None,
+                peg=float(out_block1.get("peg", 0)) if out_block1.get("peg") else None,
+                
+                # 배당 정보
+                dividend=float(out_block.get("cashsis", 0)) if out_block.get("cashsis") else None,
+                dividend_yield=float(out_block.get("cashrate", 0)) if out_block.get("cashrate") else None,
+                
+                # 외국인 정보
+                foreign_ratio=float(out_block.get("foreignratio", 0)) if out_block.get("foreignratio") else None,
+                
+                # 결산 정보
+                fiscal_year=out_block.get("gsyyyy", ""),
+                fiscal_month=out_block.get("gsmm", ""),
+                fiscal_ym=out_block.get("gsym", ""),
+                
+                # 기타
+                group_name=out_block.get("grdnm", ""),
+                homepage=out_block.get("homeurl", ""),
+                address=out_block.get("baddress", ""),
+                tel=out_block.get("btelno", "")
+            )
+            
+            logger.info(f"Financial info fetched: PER={financial_info.per}, PBR={financial_info.pbr}, ROE={financial_info.roe}")
+            return financial_info
+        
+        except Exception as e:
+            logger.error(f"Failed to get financial info: {e}")
             raise

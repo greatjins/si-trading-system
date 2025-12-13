@@ -3,7 +3,29 @@
 
 ## 빠른 시작
 
-### Windows
+### 1. PostgreSQL 시작 (선택)
+
+**Docker로 PostgreSQL 실행:**
+```bash
+# CMD
+start_postgres.bat
+
+# PowerShell
+.\start_postgres.ps1
+
+# 또는 직접
+docker-compose up -d postgres
+```
+
+**SQLite 사용 (PostgreSQL 없이):**
+```yaml
+# config.yaml
+database:
+  type: "sqlite"
+  path: "data/hts.db"
+```
+
+### 2. 애플리케이션 시작
 
 **방법 1: PowerShell 스크립트**
 ```powershell

@@ -1,6 +1,7 @@
 /**
  * 전역 스타일
  */
+@import './styles/backtest-visualization.css';
 :root {
   --color-bg: #ffffff;
   --color-bg-secondary: #f6f8fa;

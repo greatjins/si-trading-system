@@ -1,269 +1,343 @@
 """
-종목 필터링 엔진
+종목 필터링 유틸리티
 """
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-from sqlalchemy import create_engine, desc, and_
-from sqlalchemy.orm import sessionmaker
+from typing import List, Optional, Dict, Any
+from sqlalchemy.orm import Session
 
-from data.models import StockMasterModel, StockUniverseModel
+from data.models import StockMasterModel
+from data.repository import get_db_session
 from utils.logger import setup_logger
-from utils.config import config
 
 logger = setup_logger(__name__)
 
 
-class StockFilter:
-    """종목 필터링 엔진"""
+class FinancialFilter:
+    """재무 지표 기반 종목 필터"""
     
-    def __init__(self, db_url: str = None):
-        """
-        Args:
-            db_url: 데이터베이스 URL (None이면 config에서 로드)
-        """
-        if db_url is None:
-            db_type = config.get("database.type", "sqlite")
-            if db_type == "sqlite":
-                db_path = config.get("database.path", "data/hts.db")
-                db_url = f"sqlite:///{db_path}"
-            else:
-                # PostgreSQL
-                host = config.get("database.host", "localhost")
-                port = config.get("database.port", 5432)
-                database = config.get("database.database", "hts")
-                username = config.get("database.user", "hts_user")
-                password = config.get("database.password", "")
-                db_url = f"postgresql+pg8000://{username}:{password}@{host}:{port}/{database}"
-        
-        self.engine = create_engine(db_url, echo=False)
-        self.SessionLocal = sessionmaker(bind=self.engine)
-        
-        logger.info("StockFilter initialized")
+    def __init__(self):
+        """초기화"""
+        pass
     
-    def filter_by_liquidity(
-        self,
-        min_volume_amount: int = 100_000_000_000  # 1000억원
-    ) -> List[str]:
+    @staticmethod
+    def filter_by_per(
+        session: Session,
+        min_per: Optional[float] = None,
+        max_per: Optional[float] = None
+    ) -> List[StockMasterModel]:
         """
-        거래대금 필터
+        PER 기준 필터링
         
         Args:
-            min_volume_amount: 최소 거래대금 (기본: 1000억원)
-        
-        Returns:
-            종목 코드 리스트
-        """
-        session = self.SessionLocal()
-        
-        try:
-            results = session.query(StockMasterModel.symbol).filter(
-                and_(
-                    StockMasterModel.volume_amount >= min_volume_amount,
-                    StockMasterModel.is_active == True
-                )
-            ).order_by(desc(StockMasterModel.volume_amount)).all()
+            session: DB 세션
+            min_per: 최소 PER
+            max_per: 최대 PER
             
-            symbols = [r.symbol for r in results]
-            logger.info(f"Liquidity filter: {len(symbols)} symbols (>= {min_volume_amount:,}원)")
-            return symbols
-        
-        finally:
-            session.close()
-    
-    def filter_by_price_position(
-        self,
-        max_position: float = 0.5  # 52주 최고가 대비 50% 이하
-    ) -> List[str]:
+        Returns:
+            필터링된 종목 리스트
         """
-        가격 위치 필터 (저점 매수용)
+        query = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.per.isnot(None)
+        )
+        
+        if min_per is not None:
+            query = query.filter(StockMasterModel.per >= min_per)
+        if max_per is not None:
+            query = query.filter(StockMasterModel.per <= max_per)
+        
+        return query.all()
+    
+    @staticmethod
+    def filter_by_pbr(
+        session: Session,
+        min_pbr: Optional[float] = None,
+        max_pbr: Optional[float] = None
+    ) -> List[StockMasterModel]:
+        """
+        PBR 기준 필터링
         
         Args:
-            max_position: 최대 가격 위치 (0.5 = 52주 최고가 대비 50%)
-        
-        Returns:
-            종목 코드 리스트
-        """
-        session = self.SessionLocal()
-        
-        try:
-            results = session.query(StockMasterModel.symbol).filter(
-                and_(
-                    StockMasterModel.price_position <= max_position,
-                    StockMasterModel.price_position.isnot(None),
-                    StockMasterModel.is_active == True
-                )
-            ).order_by(StockMasterModel.price_position).all()
+            session: DB 세션
+            min_pbr: 최소 PBR
+            max_pbr: 최대 PBR
             
-            symbols = [r.symbol for r in results]
-            logger.info(f"Price position filter: {len(symbols)} symbols (<= {max_position:.0%})")
-            return symbols
-        
-        finally:
-            session.close()
-    
-    def filter_by_momentum(
-        self,
-        min_position: float = 0.7,  # 52주 최고가 대비 70% 이상
-        max_position: float = 1.0   # 52주 최고가 대비 100% 이하
-    ) -> List[str]:
+        Returns:
+            필터링된 종목 리스트
         """
-        모멘텀 필터 (추세 추종용)
+        query = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.pbr.isnot(None)
+        )
+        
+        if min_pbr is not None:
+            query = query.filter(StockMasterModel.pbr >= min_pbr)
+        if max_pbr is not None:
+            query = query.filter(StockMasterModel.pbr <= max_pbr)
+        
+        return query.all()
+    
+    @staticmethod
+    def filter_by_roe(
+        session: Session,
+        min_roe: Optional[float] = None,
+        max_roe: Optional[float] = None
+    ) -> List[StockMasterModel]:
+        """
+        ROE 기준 필터링
         
         Args:
-            min_position: 최소 가격 위치
-            max_position: 최대 가격 위치
-        
-        Returns:
-            종목 코드 리스트
-        """
-        session = self.SessionLocal()
-        
-        try:
-            results = session.query(StockMasterModel.symbol).filter(
-                and_(
-                    StockMasterModel.price_position >= min_position,
-                    StockMasterModel.price_position <= max_position,
-                    StockMasterModel.price_position.isnot(None),
-                    StockMasterModel.is_active == True
-                )
-            ).order_by(desc(StockMasterModel.price_position)).all()
+            session: DB 세션
+            min_roe: 최소 ROE
+            max_roe: 최대 ROE
             
-            symbols = [r.symbol for r in results]
-            logger.info(f"Momentum filter: {len(symbols)} symbols ({min_position:.0%} ~ {max_position:.0%})")
-            return symbols
-        
-        finally:
-            session.close()
-    
-    def get_universe(
-        self,
-        strategy_type: str = "mean_reversion",
-        min_volume_amount: int = 100_000_000_000,  # 1000억원
-        limit: int = 200
-    ) -> List[str]:
+        Returns:
+            필터링된 종목 리스트
         """
-        전략별 종목 유니버스 생성
+        query = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.roe.isnot(None)
+        )
+        
+        if min_roe is not None:
+            query = query.filter(StockMasterModel.roe >= min_roe)
+        if max_roe is not None:
+            query = query.filter(StockMasterModel.roe <= max_roe)
+        
+        return query.all()
+    
+    @staticmethod
+    def filter_by_multiple_criteria(
+        session: Session,
+        criteria: Dict[str, Any]
+    ) -> List[StockMasterModel]:
+        """
+        복합 조건 필터링
         
         Args:
-            strategy_type: 전략 타입 (mean_reversion, momentum)
-            min_volume_amount: 최소 거래대금
-            limit: 최대 종목 수
-        
+            session: DB 세션
+            criteria: 필터 조건 딕셔너리
+                {
+                    "per_min": 0,
+                    "per_max": 15,
+                    "pbr_min": 0,
+                    "pbr_max": 1.5,
+                    "roe_min": 10,
+                    "dividend_yield_min": 2.0,
+                    "market_cap_min": 1000000000000,  # 1조
+                    "foreign_ratio_min": 10.0
+                }
+            
         Returns:
-            종목 코드 리스트
+            필터링된 종목 리스트
         """
-        logger.info(f"Building universe for {strategy_type}")
+        query = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True
+        )
         
-        # 1. 거래대금 필터 (공통)
-        liquid_symbols = set(self.filter_by_liquidity(min_volume_amount))
+        # PER 필터
+        if "per_min" in criteria and criteria["per_min"] is not None:
+            query = query.filter(
+                StockMasterModel.per.isnot(None),
+                StockMasterModel.per >= criteria["per_min"]
+            )
+        if "per_max" in criteria and criteria["per_max"] is not None:
+            query = query.filter(
+                StockMasterModel.per.isnot(None),
+                StockMasterModel.per <= criteria["per_max"]
+            )
         
-        if strategy_type == "mean_reversion":
-            # 2. 평균회귀: 저점 종목
-            low_price_symbols = set(self.filter_by_price_position(max_position=0.5))
-            symbols = list(liquid_symbols & low_price_symbols)
+        # PBR 필터
+        if "pbr_min" in criteria and criteria["pbr_min"] is not None:
+            query = query.filter(
+                StockMasterModel.pbr.isnot(None),
+                StockMasterModel.pbr >= criteria["pbr_min"]
+            )
+        if "pbr_max" in criteria and criteria["pbr_max"] is not None:
+            query = query.filter(
+                StockMasterModel.pbr.isnot(None),
+                StockMasterModel.pbr <= criteria["pbr_max"]
+            )
         
-        elif strategy_type == "momentum":
-            # 2. 모멘텀: 고점 근처 종목
-            high_price_symbols = set(self.filter_by_momentum(min_position=0.7))
-            symbols = list(liquid_symbols & high_price_symbols)
+        # ROE 필터
+        if "roe_min" in criteria and criteria["roe_min"] is not None:
+            query = query.filter(
+                StockMasterModel.roe.isnot(None),
+                StockMasterModel.roe >= criteria["roe_min"]
+            )
+        if "roe_max" in criteria and criteria["roe_max"] is not None:
+            query = query.filter(
+                StockMasterModel.roe.isnot(None),
+                StockMasterModel.roe <= criteria["roe_max"]
+            )
         
-        else:
-            # 기본: 거래대금만
-            symbols = list(liquid_symbols)
+        # ROA 필터
+        if "roa_min" in criteria and criteria["roa_min"] is not None:
+            query = query.filter(
+                StockMasterModel.roa.isnot(None),
+                StockMasterModel.roa >= criteria["roa_min"]
+            )
         
-        # 3. 제한
-        symbols = symbols[:limit]
+        # 배당수익률 필터
+        if "dividend_yield_min" in criteria and criteria["dividend_yield_min"] is not None:
+            query = query.filter(
+                StockMasterModel.dividend_yield.isnot(None),
+                StockMasterModel.dividend_yield >= criteria["dividend_yield_min"]
+            )
         
-        logger.info(f"Universe built: {len(symbols)} symbols for {strategy_type}")
-        return symbols
+        # 시가총액 필터
+        if "market_cap_min" in criteria and criteria["market_cap_min"] is not None:
+            query = query.filter(
+                StockMasterModel.market_cap.isnot(None),
+                StockMasterModel.market_cap >= criteria["market_cap_min"]
+            )
+        if "market_cap_max" in criteria and criteria["market_cap_max"] is not None:
+            query = query.filter(
+                StockMasterModel.market_cap.isnot(None),
+                StockMasterModel.market_cap <= criteria["market_cap_max"]
+            )
+        
+        # 외국인지분율 필터
+        if "foreign_ratio_min" in criteria and criteria["foreign_ratio_min"] is not None:
+            query = query.filter(
+                StockMasterModel.foreign_ratio.isnot(None),
+                StockMasterModel.foreign_ratio >= criteria["foreign_ratio_min"]
+            )
+        
+        # 시장 필터
+        if "market" in criteria and criteria["market"]:
+            query = query.filter(StockMasterModel.market == criteria["market"])
+        
+        return query.all()
     
-    def save_universe(
-        self,
-        strategy_type: str,
-        symbols: List[str],
-        scores: Dict[str, float] = None
-    ) -> int:
+    @staticmethod
+    def get_value_stocks(
+        session: Session,
+        per_max: float = 10,
+        pbr_max: float = 1.0,
+        roe_min: float = 10,
+        limit: int = 50
+    ) -> List[StockMasterModel]:
         """
-        유니버스를 DB에 저장
+        가치주 필터 (저PER, 저PBR, 고ROE)
         
         Args:
-            strategy_type: 전략 타입
-            symbols: 종목 코드 리스트
-            scores: 종목별 점수 (선택)
-        
+            session: DB 세션
+            per_max: 최대 PER
+            pbr_max: 최대 PBR
+            roe_min: 최소 ROE
+            limit: 최대 개수
+            
         Returns:
-            저장된 레코드 수
+            가치주 리스트
         """
-        session = self.SessionLocal()
+        stocks = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.per.isnot(None),
+            StockMasterModel.pbr.isnot(None),
+            StockMasterModel.roe.isnot(None),
+            StockMasterModel.per > 0,
+            StockMasterModel.per <= per_max,
+            StockMasterModel.pbr > 0,
+            StockMasterModel.pbr <= pbr_max,
+            StockMasterModel.roe >= roe_min
+        ).order_by(
+            StockMasterModel.pbr.asc()  # PBR 낮은 순
+        ).limit(limit).all()
         
-        try:
-            # 기존 유니버스 삭제
-            session.query(StockUniverseModel).filter_by(
-                strategy_type=strategy_type
-            ).delete()
-            
-            # 새 유니버스 저장
-            for rank, symbol in enumerate(symbols, 1):
-                score = scores.get(symbol) if scores else None
-                
-                model = StockUniverseModel(
-                    strategy_type=strategy_type,
-                    symbol=symbol,
-                    rank=rank,
-                    score=score
-                )
-                session.add(model)
-            
-            session.commit()
-            logger.info(f"Saved {len(symbols)} symbols to {strategy_type} universe")
-            return len(symbols)
-        
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Failed to save universe: {e}")
-            return 0
-        finally:
-            session.close()
+        logger.info(f"Found {len(stocks)} value stocks (PER<={per_max}, PBR<={pbr_max}, ROE>={roe_min})")
+        return stocks
     
-    def load_universe(self, strategy_type: str) -> List[str]:
+    @staticmethod
+    def get_dividend_stocks(
+        session: Session,
+        dividend_yield_min: float = 3.0,
+        limit: int = 50
+    ) -> List[StockMasterModel]:
         """
-        저장된 유니버스 로드
+        배당주 필터 (고배당)
         
         Args:
-            strategy_type: 전략 타입
-        
-        Returns:
-            종목 코드 리스트
-        """
-        session = self.SessionLocal()
-        
-        try:
-            results = session.query(StockUniverseModel).filter_by(
-                strategy_type=strategy_type
-            ).order_by(StockUniverseModel.rank).all()
+            session: DB 세션
+            dividend_yield_min: 최소 배당수익률
+            limit: 최대 개수
             
-            symbols = [r.symbol for r in results]
-            logger.info(f"Loaded {len(symbols)} symbols from {strategy_type} universe")
-            return symbols
+        Returns:
+            배당주 리스트
+        """
+        stocks = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.dividend_yield.isnot(None),
+            StockMasterModel.dividend_yield >= dividend_yield_min
+        ).order_by(
+            StockMasterModel.dividend_yield.desc()  # 배당수익률 높은 순
+        ).limit(limit).all()
         
-        finally:
-            session.close()
+        logger.info(f"Found {len(stocks)} dividend stocks (yield>={dividend_yield_min}%)")
+        return stocks
     
-    def get_all_symbols(self) -> List[str]:
+    @staticmethod
+    def get_quality_stocks(
+        session: Session,
+        roe_min: float = 15,
+        roa_min: float = 10,
+        market_cap_min: float = 1_000_000_000_000,  # 1조
+        limit: int = 50
+    ) -> List[StockMasterModel]:
         """
-        전체 종목 코드 조회
+        우량주 필터 (고ROE, 고ROA, 대형주)
         
-        Returns:
-            종목 코드 리스트
-        """
-        session = self.SessionLocal()
-        
-        try:
-            results = session.query(StockMasterModel.symbol).filter_by(
-                is_active=True
-            ).all()
+        Args:
+            session: DB 세션
+            roe_min: 최소 ROE
+            roa_min: 최소 ROA
+            market_cap_min: 최소 시가총액
+            limit: 최대 개수
             
-            return [r.symbol for r in results]
+        Returns:
+            우량주 리스트
+        """
+        stocks = session.query(StockMasterModel).filter(
+            StockMasterModel.is_active == True,
+            StockMasterModel.roe.isnot(None),
+            StockMasterModel.roa.isnot(None),
+            StockMasterModel.market_cap.isnot(None),
+            StockMasterModel.roe >= roe_min,
+            StockMasterModel.roa >= roa_min,
+            StockMasterModel.market_cap >= market_cap_min
+        ).order_by(
+            StockMasterModel.roe.desc()  # ROE 높은 순
+        ).limit(limit).all()
         
-        finally:
-            session.close()
+        logger.info(f"Found {len(stocks)} quality stocks (ROE>={roe_min}, ROA>={roa_min})")
+        return stocks
+
+
+# 편의 함수
+def get_value_stocks(per_max: float = 10, pbr_max: float = 1.0, roe_min: float = 10, limit: int = 50) -> List[str]:
+    """가치주 종목 코드 리스트"""
+    session = get_db_session()
+    try:
+        stocks = FinancialFilter.get_value_stocks(session, per_max, pbr_max, roe_min, limit)
+        return [s.symbol for s in stocks]
+    finally:
+        session.close()
+
+
+def get_dividend_stocks(dividend_yield_min: float = 3.0, limit: int = 50) -> List[str]:
+    """배당주 종목 코드 리스트"""
+    session = get_db_session()
+    try:
+        stocks = FinancialFilter.get_dividend_stocks(session, dividend_yield_min, limit)
+        return [s.symbol for s in stocks]
+    finally:
+        session.close()
+
+
+def get_quality_stocks(roe_min: float = 15, roa_min: float = 10, market_cap_min: float = 1_000_000_000_000, limit: int = 50) -> List[str]:
+    """우량주 종목 코드 리스트"""
+    session = get_db_session()
+    try:
+        stocks = FinancialFilter.get_quality_stocks(session, roe_min, roa_min, market_cap_min, limit)
+        return [s.symbol for s in stocks]
+    finally:
+        session.close()

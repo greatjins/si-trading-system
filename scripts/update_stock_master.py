@@ -8,6 +8,10 @@
     python scripts/update_stock_master.py
     python scripts/update_stock_master.py --symbols 005930,000660
 """
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import asyncio
 import argparse
 from datetime import datetime, timedelta
@@ -117,6 +121,26 @@ async def update_stock_master_from_top_volume(count: int = 200):
                     current_price = stock_info["price"]
                     price_position = 1.0
                 
+                # 재무 정보 조회 (t3320)
+                try:
+                    financial_info = await adapter.market_service.get_financial_info(symbol)
+                    per = financial_info.per
+                    pbr = financial_info.pbr
+                    eps = financial_info.eps
+                    bps = financial_info.bps
+                    roe = financial_info.roe
+                    roa = financial_info.roa
+                    market_cap = financial_info.market_cap
+                    shares = financial_info.shares
+                    dividend_yield = financial_info.dividend_yield
+                    foreign_ratio = financial_info.foreign_ratio
+                    
+                    logger.info(f"  재무: PER={per}, PBR={pbr}, ROE={roe}")
+                except Exception as e:
+                    logger.warning(f"  재무 정보 조회 실패: {e}")
+                    per = pbr = eps = bps = roe = roa = None
+                    market_cap = shares = dividend_yield = foreign_ratio = None
+                
                 # DB 저장
                 stock = StockMasterModel(
                     symbol=symbol,
@@ -128,6 +152,17 @@ async def update_stock_master_from_top_volume(count: int = 200):
                     high_52w=high_52w,
                     low_52w=low_52w,
                     price_position=price_position,
+                    # 재무 지표
+                    per=per,
+                    pbr=pbr,
+                    eps=eps,
+                    bps=bps,
+                    roe=roe,
+                    roa=roa,
+                    market_cap=market_cap,
+                    shares=shares,
+                    dividend_yield=dividend_yield,
+                    foreign_ratio=foreign_ratio,
                     is_active=True,
                     updated_at=datetime.now()
                 )

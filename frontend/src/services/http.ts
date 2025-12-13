@@ -36,24 +36,45 @@ const API_BASE = getApiBaseUrl();
 // Axios 인스턴스 생성
 export const httpClient = axios.create({
   baseURL: API_BASE,
-  timeout: 10000,
+  timeout: 60000, // 60초로 증가 (백테스트용)
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request Interceptor
+// Request Interceptor - 보안 강화된 토큰 관리
 httpClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     console.log('📤 API 요청:', config.method?.toUpperCase(), config.url);
     console.log('  - baseURL:', config.baseURL);
     console.log('  - 전체 URL:', (config.baseURL || '') + (config.url || ''));
     
-    // 토큰 추가
-    const token = localStorage.getItem('access_token');
+    // 새로운 인증 서비스에서 토큰 가져오기
+    const getToken = () => {
+      try {
+        const authData = sessionStorage.getItem('auth_data');
+        if (!authData) return null;
+        
+        const tokenData = JSON.parse(authData);
+        
+        // 토큰 만료 확인
+        if (Date.now() > tokenData.expires_at) {
+          console.log('⚠️ 토큰 만료됨');
+          sessionStorage.removeItem('auth_data');
+          return null;
+        }
+        
+        return tokenData.access_token;
+      } catch (error) {
+        console.error('❌ 토큰 조회 실패:', error);
+        return null;
+      }
+    };
+    
+    const token = getToken();
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log('  - 토큰: 있음');
+      console.log('  - 토큰: 있음 (보안 강화)');
     } else {
       console.log('  - 토큰: 없음');
     }
@@ -78,31 +99,49 @@ httpClient.interceptors.response.use(
     console.error('  - 응답:', error.response?.data);
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
     
-    // 401 에러 시 토큰 갱신 시도
+    // 401 에러 시 토큰 갱신 시도 (보안 강화)
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (!refreshToken) {
+        const authData = sessionStorage.getItem('auth_data');
+        if (!authData) {
+          throw new Error('No auth data');
+        }
+        
+        const tokenData = JSON.parse(authData);
+        if (!tokenData.refresh_token) {
           throw new Error('No refresh token');
         }
         
         const refreshUrl = API_BASE ? `${API_BASE}/api/auth/refresh` : '/api/auth/refresh';
         const response = await axios.post(refreshUrl, {
-          refresh_token: refreshToken,
+          refresh_token: tokenData.refresh_token,
         });
         
-        const { access_token } = response.data;
-        localStorage.setItem('access_token', access_token);
+        const newTokenData = response.data;
+        
+        // 새 토큰 저장 (만료 시간 포함)
+        const expiresAt = Date.now() + (30 * 60 * 1000); // 30분
+        const updatedAuthData = {
+          access_token: newTokenData.access_token,
+          refresh_token: tokenData.refresh_token,
+          expires_at: expiresAt,
+          token_type: newTokenData.token_type || 'bearer',
+        };
+        
+        sessionStorage.setItem('auth_data', JSON.stringify(updatedAuthData));
         
         if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          originalRequest.headers.Authorization = `Bearer ${newTokenData.access_token}`;
         }
         
+        console.log('✅ 토큰 자동 갱신 성공');
         return httpClient(originalRequest);
       } catch (refreshError) {
-        // 토큰 갱신 실패 시 로그아웃
+        // 토큰 갱신 실패 시 세션 정리 및 로그아웃
+        console.log('❌ 토큰 갱신 실패 - 로그아웃');
+        sessionStorage.removeItem('auth_data');
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
         window.location.href = '/login';

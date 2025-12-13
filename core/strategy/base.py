@@ -3,6 +3,7 @@
 """
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 import pandas as pd
 
 from utils.types import OHLC, Position, Account, OrderSignal, Order
@@ -144,6 +145,98 @@ class BaseStrategy(ABC):
             보유 여부
         """
         return self.get_position(symbol, positions) is not None
+    
+    def select_universe(
+        self,
+        date: datetime,
+        market_data: pd.DataFrame
+    ) -> List[str]:
+        """
+        매일 거래할 종목 유니버스 선택 (포트폴리오 전략용)
+        
+        Args:
+            date: 현재 날짜
+            market_data: 전체 시장 데이터
+                - Index: symbol (종목코드)
+                - Columns: ['close', 'volume', 'per', 'pbr', 'roe', 'market_cap', ...]
+        
+        Returns:
+            선택된 종목 코드 리스트
+        
+        Note:
+            - 기본 구현은 빈 리스트 반환 (단일 종목 전략 하위 호환)
+            - 포트폴리오 전략은 이 메서드를 오버라이드하여 종목 선택 로직 구현
+            - 반환된 종목들에 대해 on_bar()가 호출됨
+        
+        Example:
+            ```python
+            def select_universe(self, date, market_data):
+                # PER < 10, PBR < 1.0 종목 선택
+                filtered = market_data[
+                    (market_data['per'] < 10) & 
+                    (market_data['pbr'] < 1.0)
+                ]
+                # 거래대금 상위 20개
+                top20 = filtered.nlargest(20, 'volume_amount')
+                return top20.index.tolist()
+            ```
+        """
+        return []
+    
+    def get_target_weights(
+        self,
+        universe: List[str],
+        market_data,  # Union[pd.DataFrame, Dict[str, float]]
+        account: Account
+    ) -> Dict[str, float]:
+        """
+        각 종목의 목표 비중 계산 (포트폴리오 전략용)
+        
+        Args:
+            universe: 선택된 종목 리스트
+            market_data: 시장 데이터 (DataFrame 또는 Dict[symbol, price])
+            account: 계좌 상태
+        
+        Returns:
+            종목별 목표 비중 (합계 1.0)
+            예: {"005930": 0.2, "000660": 0.3, "035420": 0.5}
+        
+        Note:
+            - 기본 구현은 균등 분배
+            - 포트폴리오 전략은 이 메서드를 오버라이드하여 비중 로직 구현
+            - market_data는 DataFrame(전체 시장 데이터) 또는 Dict(가격만)일 수 있음
+        
+        Example:
+            ```python
+            def get_target_weights(self, universe, market_data, account):
+                # DataFrame인 경우
+                if isinstance(market_data, pd.DataFrame):
+                    market_caps = market_data.loc[universe, 'market_cap']
+                    total_cap = market_caps.sum()
+                    return {symbol: cap / total_cap for symbol, cap in market_caps.items()}
+                # Dict인 경우 (균등 분배)
+                else:
+                    weight = 1.0 / len(universe)
+                    return {symbol: weight for symbol in universe}
+            ```
+        """
+        if not universe:
+            return {}
+        
+        # 기본: 균등 분배
+        weight = 1.0 / len(universe)
+        return {symbol: weight for symbol in universe}
+    
+    def is_portfolio_strategy(self) -> bool:
+        """
+        포트폴리오 전략 여부 확인
+        
+        Returns:
+            True: 포트폴리오 전략 (여러 종목)
+            False: 단일 종목 전략
+        """
+        # select_universe가 오버라이드되었는지 확인
+        return self.__class__.select_universe != BaseStrategy.select_universe
     
     def __repr__(self) -> str:
         return f"{self.name}({self.params})"

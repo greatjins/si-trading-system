@@ -44,6 +44,7 @@ export const ENDPOINTS = {
   // Backtest
   BACKTEST: {
     RUN: `${API_BASE}/api/backtest/run`,
+    PORTFOLIO: `${API_BASE}/api/backtest/portfolio`,
     RESULTS: `${API_BASE}/api/backtest/results`,
   },
   

@@ -51,3 +51,5 @@ export interface WebSocketMessage {
   type: string
   [key: string]: any
 }
+// 백테스트 관련 타입
+export * from './backtest'

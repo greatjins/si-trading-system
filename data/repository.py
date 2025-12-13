@@ -1,7 +1,7 @@
 """
 데이터베이스 Repository
 """
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 import pandas as pd
 from sqlalchemy import create_engine, desc
@@ -169,6 +169,147 @@ class DataRepository:
         except Exception as e:
             logger.error(f"Failed to get symbols: {e}")
             return []
+    
+    def get_market_snapshot(
+        self,
+        date: datetime,
+        symbols: List[str] = None
+    ) -> pd.DataFrame:
+        """
+        특정 날짜의 시장 스냅샷 조회 (포트폴리오 백테스트용)
+        
+        Args:
+            date: 날짜
+            symbols: 종목 리스트 (None이면 전체)
+        
+        Returns:
+            시장 데이터 DataFrame
+            - Index: symbol
+            - Columns: close, volume, volume_amount, per, pbr, roe, market_cap, ...
+        """
+        try:
+            from data.models import StockMasterModel, OHLCModel
+            
+            session = get_db_session()
+            try:
+                # 1. 활성 종목 목록 조회
+                query = session.query(StockMasterModel).filter_by(is_active=True)
+                
+                if symbols:
+                    query = query.filter(StockMasterModel.symbol.in_(symbols))
+                
+                stocks = query.all()
+                
+                if not stocks:
+                    return pd.DataFrame()
+                
+                # 2. 해당 날짜의 OHLC 데이터 조회
+                symbol_list = [s.symbol for s in stocks]
+                
+                # 날짜 범위: date 당일 또는 이전 최근 데이터
+                ohlc_query = session.query(OHLCModel).filter(
+                    OHLCModel.symbol.in_(symbol_list),
+                    OHLCModel.interval == '1d',
+                    OHLCModel.timestamp <= date
+                )
+                
+                # 각 종목별 최신 데이터만 (서브쿼리)
+                from sqlalchemy import func
+                subquery = session.query(
+                    OHLCModel.symbol,
+                    func.max(OHLCModel.timestamp).label('max_timestamp')
+                ).filter(
+                    OHLCModel.symbol.in_(symbol_list),
+                    OHLCModel.interval == '1d',
+                    OHLCModel.timestamp <= date
+                ).group_by(OHLCModel.symbol).subquery()
+                
+                ohlc_data = session.query(OHLCModel).join(
+                    subquery,
+                    (OHLCModel.symbol == subquery.c.symbol) &
+                    (OHLCModel.timestamp == subquery.c.max_timestamp)
+                ).all()
+                
+                # OHLC 데이터를 딕셔너리로 변환
+                ohlc_dict = {
+                    ohlc.symbol: {
+                        'close': ohlc.close,
+                        'volume': ohlc.volume,
+                        'volume_amount': ohlc.close * ohlc.volume
+                    }
+                    for ohlc in ohlc_data
+                }
+                
+                # 3. 종목 정보 + OHLC 데이터 결합
+                data = []
+                for stock in stocks:
+                    ohlc_info = ohlc_dict.get(stock.symbol)
+                    
+                    # OHLC 데이터가 없는 종목은 제외
+                    if not ohlc_info:
+                        continue
+                    
+                    data.append({
+                        'symbol': stock.symbol,
+                        'name': stock.name,
+                        'close': ohlc_info['close'],
+                        'volume': ohlc_info['volume'],
+                        'volume_amount': ohlc_info['volume_amount'],
+                        'per': stock.per or 0,
+                        'pbr': stock.pbr or 0,
+                        'roe': stock.roe or 0,
+                        'roa': stock.roa or 0,
+                        'market_cap': stock.market_cap or 0,
+                        'dividend_yield': stock.dividend_yield or 0,
+                        'price_position': stock.price_position or 0,
+                    })
+                
+                if not data:
+                    return pd.DataFrame()
+                
+                df = pd.DataFrame(data)
+                df = df.set_index('symbol')
+                
+                logger.debug(f"Market snapshot for {date.date()}: {len(df)} stocks")
+                return df
+            finally:
+                session.close()
+        
+        except Exception as e:
+            logger.error(f"Failed to get market snapshot: {e}", exc_info=True)
+            return pd.DataFrame()
+    
+    def get_multi_ohlc(
+        self,
+        symbols: List[str],
+        interval: str = "1d",
+        start_date: datetime = None,
+        end_date: datetime = None
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        여러 종목의 OHLC 데이터를 한번에 조회 (배치)
+        
+        Args:
+            symbols: 종목 코드 리스트
+            interval: 시간 간격
+            start_date: 시작일
+            end_date: 종료일
+        
+        Returns:
+            {종목코드: OHLC DataFrame} 딕셔너리
+        """
+        result = {}
+        
+        for symbol in symbols:
+            try:
+                df = self.get_ohlc(symbol, interval, start_date, end_date)
+                if not df.empty:
+                    result[symbol] = df
+            except Exception as e:
+                logger.error(f"Failed to load {symbol}: {e}")
+                continue
+        
+        return result
 
 
 class OHLCRepository:
@@ -461,6 +602,9 @@ class BacktestRepository:
         
         try:
             # 백테스트 결과 저장
+            # equity_timestamps를 ISO 문자열로 변환
+            equity_timestamps_str = [ts.isoformat() for ts in result.equity_timestamps] if result.equity_timestamps else []
+            
             model = BacktestResultModel(
                 strategy_name=result.strategy_name,
                 parameters=result.parameters,
@@ -474,7 +618,8 @@ class BacktestRepository:
                 win_rate=result.win_rate,
                 profit_factor=result.profit_factor,
                 total_trades=result.total_trades,
-                equity_curve=result.equity_curve
+                equity_curve=result.equity_curve,
+                equity_timestamps=equity_timestamps_str
             )
             
             session.add(model)

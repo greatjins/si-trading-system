@@ -1,0 +1,133 @@
+{
+  "strategies": [
+    {
+      "name": "삼성자산운용 모멘텀-밸류 복합전략",
+      "description": "RSI 과매도 + PER 저평가 + 거래량 급증 포착. 중대형주 중심 안정적 중장기 수익 추구",
+      "category": "institutional",
+      "riskLevel": "medium",
+      "expectedReturn": "15-20%",
+      "maxDrawdown": "5%",
+      "config": {
+        "stockSelection": {
+          "marketCap": {"min": 3000, "max": 100000},
+          "volume": {"min": 500000},
+          "price": {"min": 10000, "max": 200000},
+          "market": ["KOSPI", "KOSDAQ"],
+          "per": {"min": 3, "max": 15},
+          "pbr": {"min": 0.3, "max": 2.0},
+          "roe": {"min": 8}
+        },
+        "buyConditions": [
+          {"indicator": "rsi", "operator": "<", "value": 35, "period": 14},
+          {"indicator": "ma", "operator": ">", "value": "close", "period": 20},
+          {"indicator": "volume_ma", "operator": ">", "value": 1.5, "period": 10}
+        ],
+        "sellConditions": [
+          {"indicator": "rsi", "operator": ">", "value": 70, "period": 14},
+          {"indicator": "close", "operator": "<", "value": "ma", "period": 20}
+        ],
+        "riskManagement": {
+          "stopLoss": 8.0,
+          "takeProfit": 25.0,
+          "maxPositions": 8
+        }
+      }
+    },
+    {
+      "name": "미래에셋 성장주 모멘텀 전략",
+      "description": "MACD 골든크로스 + 볼린저밴드 돌파 + 높은 ROE. 성장주 중심 공격적 운용",
+      "category": "institutional", 
+      "riskLevel": "high",
+      "expectedReturn": "25-35%",
+      "maxDrawdown": "12%",
+      "config": {
+        "stockSelection": {
+          "marketCap": {"min": 1000, "max": 50000},
+          "volume": {"min": 300000},
+          "price": {"min": 5000, "max": 150000},
+          "market": ["KOSPI", "KOSDAQ"],
+          "roe": {"min": 15},
+          "per": {"max": 25}
+        },
+        "buyConditions": [
+          {"indicator": "macd", "operator": "golden_cross", "value": 0},
+          {"indicator": "bollinger", "operator": ">", "value": "upper", "period": 20},
+          {"indicator": "volume_ma", "operator": ">", "value": 2.0, "period": 5}
+        ],
+        "sellConditions": [
+          {"indicator": "macd", "operator": "dead_cross", "value": 0},
+          {"indicator": "bollinger", "operator": "<", "value": "middle", "period": 20}
+        ],
+        "riskManagement": {
+          "stopLoss": 12.0,
+          "takeProfit": 40.0,
+          "maxPositions": 6
+        }
+      }
+    },
+    {
+      "name": "KB자산운용 디펜시브 배당 전략",
+      "description": "안정적 배당 + 낮은 변동성 + 우량주. 대형주만 선별하여 보수적 장기투자",
+      "category": "institutional",
+      "riskLevel": "low", 
+      "expectedReturn": "10-15%",
+      "maxDrawdown": "8%",
+      "config": {
+        "stockSelection": {
+          "marketCap": {"min": 10000, "max": 500000},
+          "volume": {"min": 200000},
+          "price": {"min": 20000, "max": 500000},
+          "market": ["KOSPI"],
+          "per": {"min": 5, "max": 12},
+          "pbr": {"min": 0.5, "max": 1.5},
+          "roe": {"min": 10}
+        },
+        "buyConditions": [
+          {"indicator": "ma", "operator": ">", "value": "ma", "period": 20, "comparePeriod": 60},
+          {"indicator": "rsi", "operator": "<", "value": 45, "period": 14},
+          {"indicator": "close", "operator": ">", "value": "ma", "period": 120}
+        ],
+        "sellConditions": [
+          {"indicator": "ma", "operator": "<", "value": "ma", "period": 20, "comparePeriod": 60},
+          {"indicator": "rsi", "operator": ">", "value": 65, "period": 14}
+        ],
+        "riskManagement": {
+          "stopLoss": 15.0,
+          "takeProfit": null,
+          "maxPositions": 12
+        }
+      }
+    },
+    {
+      "name": "NH투자증권 ICT 스마트머니 전략",
+      "description": "ICT 이론 기반 기관 자금 추적. BOS 돌파 + 스마트머니 플로우 + 유동성 풀 활용",
+      "category": "institutional",
+      "riskLevel": "high",
+      "expectedReturn": "20-30%", 
+      "maxDrawdown": "10%",
+      "config": {
+        "stockSelection": {
+          "marketCap": {"min": 2000, "max": 80000},
+          "volume": {"min": 1000000},
+          "price": {"min": 15000, "max": 300000},
+          "market": ["KOSPI", "KOSDAQ"],
+          "per": {"max": 20}
+        },
+        "buyConditions": [
+          {"indicator": "bos", "operator": "break_high", "value": 0, "lookback": 20},
+          {"indicator": "smart_money", "operator": "bullish", "value": 0, "period": 15},
+          {"indicator": "fvg", "operator": "in_gap", "value": 0, "min_gap": 0.015}
+        ],
+        "sellConditions": [
+          {"indicator": "liquidity_pool", "operator": "sweep_pool", "value": 0, "cluster_threshold": 0.02},
+          {"indicator": "smart_money", "operator": "bearish", "value": 0, "period": 10}
+        ],
+        "riskManagement": {
+          "stopLoss": 6.0,
+          "takeProfit": 18.0,
+          "maxPositions": 10
+        }
+      }
+    }
+  ]
+}

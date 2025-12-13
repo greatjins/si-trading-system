@@ -184,6 +184,76 @@ class PositionManager:
         """청산된 거래 내역"""
         return self.closed_trades
     
+    def get_portfolio_weights(self, total_equity: float) -> Dict[str, float]:
+        """
+        현재 포트폴리오 비중 계산
+        
+        Args:
+            total_equity: 총 자산
+        
+        Returns:
+            {종목코드: 비중} 딕셔너리
+        """
+        if total_equity <= 0:
+            return {}
+        
+        weights = {}
+        for symbol, position in self.positions.items():
+            position_value = position.quantity * position.current_price
+            weights[symbol] = position_value / total_equity
+        
+        return weights
+    
+    def calculate_rebalance_orders(
+        self,
+        target_weights: Dict[str, float],
+        current_prices: Dict[str, float],
+        total_equity: float
+    ) -> Dict[str, int]:
+        """
+        리밸런싱에 필요한 주문 수량 계산
+        
+        Args:
+            target_weights: 목표 비중 {종목코드: 비중}
+            current_prices: 현재가 {종목코드: 가격}
+            total_equity: 총 자산
+        
+        Returns:
+            {종목코드: 수량} 딕셔너리 (양수: 매수, 음수: 매도)
+        """
+        orders = {}
+        
+        # 현재 보유 종목
+        current_symbols = set(self.positions.keys())
+        target_symbols = set(target_weights.keys())
+        
+        # 1. 목표에 없는 종목 청산
+        for symbol in current_symbols - target_symbols:
+            position = self.positions[symbol]
+            orders[symbol] = -position.quantity  # 전량 매도
+        
+        # 2. 목표 비중에 맞춰 조정
+        for symbol, target_weight in target_weights.items():
+            if symbol not in current_prices:
+                continue
+            
+            current_price = current_prices[symbol]
+            target_value = total_equity * target_weight
+            target_quantity = int(target_value / current_price)
+            
+            # 현재 보유 수량
+            current_quantity = 0
+            if symbol in self.positions:
+                current_quantity = self.positions[symbol].quantity
+            
+            # 수량 차이
+            quantity_diff = target_quantity - current_quantity
+            
+            if quantity_diff != 0:
+                orders[symbol] = quantity_diff
+        
+        return orders
+    
     def clear(self) -> None:
         """모든 포지션 및 거래 내역 초기화"""
         self.positions.clear()

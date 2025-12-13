@@ -2,8 +2,80 @@
  * 전략 빌더 페이지 - 노코드 전략 생성
  */
 import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PageLayout } from '../components/Layout/PageLayout';
 import { httpClient } from '../services/http';
+import { AdvancedConditionInput } from '../components/StrategyBuilder/AdvancedConditionInput';
+
+// 타입 안전한 헬퍼 함수들
+const createDefaultConditionValue = (): ConditionValue => ({
+  valueType: 'number',
+  numericValue: 0
+});
+
+const createIndicatorValue = (type: 'MA' | 'EMA' | 'RSI' | 'MACD', period: number = 20): ConditionValue => ({
+  valueType: 'indicator',
+  indicatorValue: { type, period }
+});
+
+const createPriceValue = (priceType: 'close' | 'open' | 'high' | 'low'): ConditionValue => ({
+  valueType: 'price',
+  priceType
+});
+
+const createNumericValue = (value: number): ConditionValue => ({
+  valueType: 'number',
+  numericValue: value
+});
+
+// 조건 값을 문자열로 변환 (백엔드 호환성)
+const conditionValueToString = (value: ConditionValue): string => {
+  switch (value.valueType) {
+    case 'number':
+      return String(value.numericValue || 0);
+    case 'price':
+      return value.priceType || 'close';
+    case 'indicator':
+      const ind = value.indicatorValue;
+      if (!ind) return 'MA(20)';
+      return ind.type === 'MACD' ? 'MACD' : `${ind.type}(${ind.period || 20})`;
+    default:
+      return '0';
+  }
+};
+
+// 문자열을 조건 값으로 변환 (기존 데이터 호환성)
+const stringToConditionValue = (str: string | number): ConditionValue => {
+  if (typeof str === 'number') {
+    return createNumericValue(str);
+  }
+  
+  if (typeof str === 'string') {
+    // 가격 타입 체크
+    if (['close', 'open', 'high', 'low'].includes(str)) {
+      return createPriceValue(str as 'close' | 'open' | 'high' | 'low');
+    }
+    
+    // 지표 타입 체크
+    if (str.includes('MA(') || str.includes('EMA(') || str.includes('RSI(') || str === 'MACD') {
+      const match = str.match(/^(MA|EMA|RSI)\((\d+)\)$/);
+      if (match) {
+        return createIndicatorValue(match[1] as 'MA' | 'EMA' | 'RSI', parseInt(match[2]));
+      }
+      if (str === 'MACD') {
+        return createIndicatorValue('MACD');
+      }
+    }
+    
+    // 숫자 문자열
+    const numValue = parseFloat(str);
+    if (!isNaN(numValue)) {
+      return createNumericValue(numValue);
+    }
+  }
+  
+  return createDefaultConditionValue();
+};
 
 interface IndicatorParameter {
   name: string;
@@ -23,12 +95,27 @@ interface IndicatorInfo {
   description: string;
 }
 
+// 값 타입을 명확하게 구분
+type ConditionValueType = 'number' | 'price' | 'indicator';
+
+interface IndicatorValue {
+  type: 'MA' | 'EMA' | 'RSI' | 'MACD';
+  period?: number;
+}
+
+interface ConditionValue {
+  valueType: ConditionValueType;
+  numericValue?: number;
+  priceType?: 'close' | 'open' | 'high' | 'low';
+  indicatorValue?: IndicatorValue;
+}
+
 interface Condition {
   id: string;
   type: 'indicator' | 'price' | 'volume';
   indicator?: string;
   operator: string;
-  value: string | number;
+  value: ConditionValue;
   period?: number;
   // ATR 관련
   atrMultiple?: number;
@@ -150,14 +237,31 @@ interface Strategy {
   };
 }
 
+// 타입 가드 함수들
+const isStringValue = (value: string | number): value is string => {
+  return typeof value === 'string';
+};
+
+const getIndicatorPeriod = (value: string | number): string => {
+  if (!isStringValue(value)) return '20';
+  const match = value.match(/\((\d+)\)/);
+  return match?.[1] || '20';
+};
+
+const getIndicatorType = (value: string | number): string => {
+  if (!isStringValue(value)) return 'MA';
+  return value.split('(')[0] || 'MA';
+};
+
 export const StrategyBuilderPage = () => {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [editingStrategyId, setEditingStrategyId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
   // URL 파라미터에서 edit ID 가져오기
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const editId = params.get('edit');
+    const editId = searchParams.get('edit');
     
     if (editId) {
       setEditingStrategyId(Number(editId));
@@ -178,8 +282,14 @@ export const StrategyBuilderPage = () => {
           name: loadedStrategy.config.name,
           description: loadedStrategy.config.description,
           stockSelection: loadedStrategy.config.stockSelection,
-          buyConditions: loadedStrategy.config.buyConditions,
-          sellConditions: loadedStrategy.config.sellConditions,
+          buyConditions: loadedStrategy.config.buyConditions.map((condition: any) => ({
+            ...condition,
+            value: stringToConditionValue(condition.value)
+          })),
+          sellConditions: loadedStrategy.config.sellConditions.map((condition: any) => ({
+            ...condition,
+            value: stringToConditionValue(condition.value)
+          })),
           entryStrategy: loadedStrategy.config.entryStrategy,
           positionManagement: loadedStrategy.config.positionManagement,
         });
@@ -285,7 +395,7 @@ export const StrategyBuilderPage = () => {
       type: 'indicator',
       indicator: defaultIndicator.id,
       operator: defaultIndicator.operators[0],
-      value: 0,
+      value: createDefaultConditionValue(),
       period: defaultIndicator.parameters[0]?.default || 20,
     };
     setStrategy({
@@ -302,7 +412,7 @@ export const StrategyBuilderPage = () => {
       type: 'indicator',
       indicator: defaultIndicator.id,
       operator: defaultIndicator.operators[0],
-      value: 0,
+      value: createDefaultConditionValue(),
       period: defaultIndicator.parameters[0]?.default || 20,
     };
     setStrategy({
@@ -336,7 +446,25 @@ export const StrategyBuilderPage = () => {
     console.log('💾 전략 저장:', strategy);
     
     try {
-      const response = await httpClient.post('/api/strategy-builder/save', strategy);
+      // 백엔드 호환성을 위해 조건 값들을 문자열로 변환
+      const convertedStrategy = {
+        ...strategy,
+        buyConditions: strategy.buyConditions.map(condition => ({
+          ...condition,
+          value: conditionValueToString(condition.value)
+        })),
+        sellConditions: strategy.sellConditions.map(condition => ({
+          ...condition,
+          value: conditionValueToString(condition.value)
+        }))
+      };
+      
+      // 수정 모드면 strategy_id 포함
+      const payload = editingStrategyId 
+        ? { ...convertedStrategy, strategy_id: editingStrategyId }
+        : convertedStrategy;
+      
+      const response = await httpClient.post('/api/strategy-builder/save', payload);
       console.log('✅ 저장 성공:', response.data);
       
       const goToBacktest = confirm(
@@ -344,7 +472,7 @@ export const StrategyBuilderPage = () => {
       );
       
       if (goToBacktest) {
-        window.location.href = `/backtest?strategy=${response.data.strategy_id}`;
+        navigate(`/backtest?strategy=${response.data.strategy_id}`);
       }
     } catch (err: any) {
       console.error('❌ 저장 실패:', err);
@@ -983,18 +1111,119 @@ export const StrategyBuilderPage = () => {
                         ))}
                       </select>
                       
-                      <input
-                        type="text"
-                        value={condition.value}
-                        onChange={(e) => {
-                          const updated = strategy.buyConditions.map((c) =>
-                            c.id === condition.id ? { ...c, value: e.target.value } : c
-                          );
-                          setStrategy({ ...strategy, buyConditions: updated });
-                        }}
-                        placeholder="값 또는 MA(50)"
-                        className="form-input"
-                      />
+                      {/* 상대적 비교 가능한 값 입력 */}
+                      <div className="value-input-container">
+                        <select
+                          value={typeof condition.value === 'string' && condition.value.includes('MA(') ? 'indicator' : 
+                                typeof condition.value === 'string' && condition.value === 'close' ? 'close' :
+                                typeof condition.value === 'string' && condition.value === 'open' ? 'open' :
+                                typeof condition.value === 'string' && condition.value === 'high' ? 'high' :
+                                typeof condition.value === 'string' && condition.value === 'low' ? 'low' :
+                                'number'}
+                          onChange={(e) => {
+                            let newValue: string | number;
+                            switch(e.target.value) {
+                              case 'close': newValue = 'close'; break;
+                              case 'open': newValue = 'open'; break;
+                              case 'high': newValue = 'high'; break;
+                              case 'low': newValue = 'low'; break;
+                              case 'indicator': newValue = 'MA(20)'; break;
+                              default: newValue = 0; break;
+                            }
+                            
+                            const updated = strategy.buyConditions.map((c) =>
+                              c.id === condition.id ? { ...c, value: newValue } : c
+                            );
+                            setStrategy({ ...strategy, buyConditions: updated });
+                          }}
+                          className="form-select small"
+                          style={{ minWidth: '120px' }}
+                        >
+                          <option value="number">숫자 입력</option>
+                          <option value="close">현재가</option>
+                          <option value="open">시가</option>
+                          <option value="high">고가</option>
+                          <option value="low">저가</option>
+                          <option value="indicator">다른 지표</option>
+                        </select>
+                        
+                        {/* 숫자 입력 */}
+                        {(typeof condition.value === 'number' || 
+                          (typeof condition.value === 'string' && !['close', 'open', 'high', 'low'].includes(condition.value) && !condition.value.includes('MA('))) && (
+                          <input
+                            type="number"
+                            value={typeof condition.value === 'number' ? condition.value : ''}
+                            onChange={(e) => {
+                              const updated = strategy.buyConditions.map((c) =>
+                                c.id === condition.id ? { ...c, value: Number(e.target.value) } : c
+                              );
+                              setStrategy({ ...strategy, buyConditions: updated });
+                            }}
+                            placeholder="숫자 값"
+                            className="form-input small"
+                            style={{ minWidth: '100px' }}
+                          />
+                        )}
+                        
+                        {/* 지표 입력 */}
+                        {typeof condition.value === 'string' && condition.value.includes('MA(') && (
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <select
+                              value={condition.value.includes('MA(') ? 'MA' : 
+                                     condition.value.includes('EMA(') ? 'EMA' :
+                                     condition.value.includes('RSI(') ? 'RSI' :
+                                     condition.value.includes('MACD') ? 'MACD' : 'MA'}
+                              onChange={(e) => {
+                                const period = condition.value.match(/\((\d+)\)/)?.[1] || '20';
+                                let newValue = '';
+                                switch(e.target.value) {
+                                  case 'MA': newValue = `MA(${period})`; break;
+                                  case 'EMA': newValue = `EMA(${period})`; break;
+                                  case 'RSI': newValue = `RSI(${period})`; break;
+                                  case 'MACD': newValue = 'MACD'; break;
+                                  default: newValue = `MA(${period})`;
+                                }
+                                
+                                const updated = strategy.buyConditions.map((c) =>
+                                  c.id === condition.id ? { ...c, value: newValue } : c
+                                );
+                                setStrategy({ ...strategy, buyConditions: updated });
+                              }}
+                              className="form-select small"
+                              style={{ minWidth: '80px' }}
+                            >
+                              <option value="MA">이동평균</option>
+                              <option value="EMA">지수평균</option>
+                              <option value="RSI">RSI</option>
+                              <option value="MACD">MACD</option>
+                            </select>
+                            
+                            {!condition.value.includes('MACD') && (
+                              <>
+                                <span>(</span>
+                                <input
+                                  type="number"
+                                  value={condition.value.match(/\((\d+)\)/)?.[1] || '20'}
+                                  onChange={(e) => {
+                                    const indicatorType = condition.value.split('(')[0];
+                                    const newValue = `${indicatorType}(${e.target.value})`;
+                                    
+                                    const updated = strategy.buyConditions.map((c) =>
+                                      c.id === condition.id ? { ...c, value: newValue } : c
+                                    );
+                                    setStrategy({ ...strategy, buyConditions: updated });
+                                  }}
+                                  className="form-input small"
+                                  style={{ width: '60px' }}
+                                  min="1"
+                                  max="200"
+                                />
+                                <span>)</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       
                       <button
                         onClick={() => removeCondition(condition.id, 'buy')}
@@ -1015,6 +1244,27 @@ export const StrategyBuilderPage = () => {
               <button onClick={addBuyCondition} className="btn btn-secondary">
                 + 매수 조건 추가
               </button>
+              
+              <div className="info-box" style={{ marginTop: '24px' }}>
+                <strong>💡 상대적 비교 활용법</strong>
+                <p><strong>이평선 밀집 → 상승전환 패턴:</strong></p>
+                <p>• 조건 1: MA(5) &gt; MA(20) (단기 &gt; 중기)</p>
+                <p>• 조건 2: MA(20) &gt; MA(60) (중기 &gt; 장기)</p>
+                <p>• 조건 3: 거래량 &gt; MA(20) (거래량 급증)</p>
+                <br />
+                <p><strong>🎯 ICT 이론 기반 패턴:</strong></p>
+                <p>• <strong>BOS (Break of Structure):</strong> 현재가 &gt; 고가 (구조적 돌파)</p>
+                <p>• <strong>Fair Value Gap:</strong> 이전 고가 &lt; 다음 저가 (가격 공백)</p>
+                <p>• <strong>Order Block:</strong> 높은 거래량 + 큰 몸통 (기관 주문)</p>
+                <p>• <strong>Liquidity Pool:</strong> 고점/저점 클러스터 (유동성 집중)</p>
+                <p>• <strong>Smart Money:</strong> 거래량 &gt; MA(10) + RSI(14) &gt; 50</p>
+                <br />
+                <p><strong>📈 ICT 진입 조건 예시:</strong></p>
+                <p>1. 현재가 &gt; MA(20) (상승 추세 확인)</p>
+                <p>2. 거래량 &gt; MA(20) * 1.5 (기관 참여)</p>
+                <p>3. RSI(14) &gt; 50 (모멘텀 확인)</p>
+                <p>4. 현재가 &gt; 고가 (BOS 돌파)</p>
+              </div>
             </div>
           )}
           
@@ -1587,18 +1837,119 @@ export const StrategyBuilderPage = () => {
                         ))}
                       </select>
                       
-                      <input
-                        type="text"
-                        value={condition.value}
-                        onChange={(e) => {
-                          const updated = strategy.sellConditions.map((c) =>
-                            c.id === condition.id ? { ...c, value: e.target.value } : c
-                          );
-                          setStrategy({ ...strategy, sellConditions: updated });
-                        }}
-                        placeholder="값 또는 MA(50)"
-                        className="form-input"
-                      />
+                      {/* 상대적 비교 가능한 값 입력 */}
+                      <div className="value-input-container">
+                        <select
+                          value={typeof condition.value === 'string' && condition.value.includes('MA(') ? 'indicator' : 
+                                typeof condition.value === 'string' && condition.value === 'close' ? 'close' :
+                                typeof condition.value === 'string' && condition.value === 'open' ? 'open' :
+                                typeof condition.value === 'string' && condition.value === 'high' ? 'high' :
+                                typeof condition.value === 'string' && condition.value === 'low' ? 'low' :
+                                'number'}
+                          onChange={(e) => {
+                            let newValue: string | number;
+                            switch(e.target.value) {
+                              case 'close': newValue = 'close'; break;
+                              case 'open': newValue = 'open'; break;
+                              case 'high': newValue = 'high'; break;
+                              case 'low': newValue = 'low'; break;
+                              case 'indicator': newValue = 'MA(20)'; break;
+                              default: newValue = 0; break;
+                            }
+                            
+                            const updated = strategy.sellConditions.map((c) =>
+                              c.id === condition.id ? { ...c, value: newValue } : c
+                            );
+                            setStrategy({ ...strategy, sellConditions: updated });
+                          }}
+                          className="form-select small"
+                          style={{ minWidth: '120px' }}
+                        >
+                          <option value="number">숫자 입력</option>
+                          <option value="close">현재가</option>
+                          <option value="open">시가</option>
+                          <option value="high">고가</option>
+                          <option value="low">저가</option>
+                          <option value="indicator">다른 지표</option>
+                        </select>
+                        
+                        {/* 숫자 입력 */}
+                        {(typeof condition.value === 'number' || 
+                          (typeof condition.value === 'string' && !['close', 'open', 'high', 'low'].includes(condition.value) && !condition.value.includes('MA('))) && (
+                          <input
+                            type="number"
+                            value={typeof condition.value === 'number' ? condition.value : ''}
+                            onChange={(e) => {
+                              const updated = strategy.sellConditions.map((c) =>
+                                c.id === condition.id ? { ...c, value: Number(e.target.value) } : c
+                              );
+                              setStrategy({ ...strategy, sellConditions: updated });
+                            }}
+                            placeholder="숫자 값"
+                            className="form-input small"
+                            style={{ minWidth: '100px' }}
+                          />
+                        )}
+                        
+                        {/* 지표 입력 */}
+                        {typeof condition.value === 'string' && condition.value.includes('MA(') && (
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <select
+                              value={condition.value.includes('MA(') ? 'MA' : 
+                                     condition.value.includes('EMA(') ? 'EMA' :
+                                     condition.value.includes('RSI(') ? 'RSI' :
+                                     condition.value.includes('MACD') ? 'MACD' : 'MA'}
+                              onChange={(e) => {
+                                const period = condition.value.match(/\((\d+)\)/)?.[1] || '20';
+                                let newValue = '';
+                                switch(e.target.value) {
+                                  case 'MA': newValue = `MA(${period})`; break;
+                                  case 'EMA': newValue = `EMA(${period})`; break;
+                                  case 'RSI': newValue = `RSI(${period})`; break;
+                                  case 'MACD': newValue = 'MACD'; break;
+                                  default: newValue = `MA(${period})`;
+                                }
+                                
+                                const updated = strategy.sellConditions.map((c) =>
+                                  c.id === condition.id ? { ...c, value: newValue } : c
+                                );
+                                setStrategy({ ...strategy, sellConditions: updated });
+                              }}
+                              className="form-select small"
+                              style={{ minWidth: '80px' }}
+                            >
+                              <option value="MA">이동평균</option>
+                              <option value="EMA">지수평균</option>
+                              <option value="RSI">RSI</option>
+                              <option value="MACD">MACD</option>
+                            </select>
+                            
+                            {!condition.value.includes('MACD') && (
+                              <>
+                                <span>(</span>
+                                <input
+                                  type="number"
+                                  value={condition.value.match(/\((\d+)\)/)?.[1] || '20'}
+                                  onChange={(e) => {
+                                    const indicatorType = condition.value.split('(')[0];
+                                    const newValue = `${indicatorType}(${e.target.value})`;
+                                    
+                                    const updated = strategy.sellConditions.map((c) =>
+                                      c.id === condition.id ? { ...c, value: newValue } : c
+                                    );
+                                    setStrategy({ ...strategy, sellConditions: updated });
+                                  }}
+                                  className="form-input small"
+                                  style={{ width: '60px' }}
+                                  min="1"
+                                  max="200"
+                                />
+                                <span>)</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       
                       <button
                         onClick={() => removeCondition(condition.id, 'sell')}
@@ -1619,6 +1970,18 @@ export const StrategyBuilderPage = () => {
               <button onClick={addSellCondition} className="btn btn-secondary">
                 + 매도 조건 추가
               </button>
+              
+              <div className="info-box" style={{ marginTop: '24px' }}>
+                <strong>💡 매도 조건 활용법</strong>
+                <p><strong>추세 전환 감지:</strong></p>
+                <p>• 조건 1: MA(5) &lt; MA(20) (단기 하향 돌파)</p>
+                <p>• 조건 2: RSI(14) &lt; 30 (과매도 구간)</p>
+                <br />
+                <p><strong>수익 실현:</strong></p>
+                <p>• 조건 1: RSI(14) &gt; 70 (과매수 구간)</p>
+                <p>• 조건 2: 현재가 &lt; MA(10) (단기 지지선 이탈)</p>
+                <p>• 트레일링 스탑과 함께 사용하면 더 효과적입니다</p>
+              </div>
             </div>
           )}
           
@@ -2326,3 +2689,6 @@ export const StrategyBuilderPage = () => {
     </PageLayout>
   );
 };
+
+// Default export 추가 (Vite HMR 호환성)
+export default StrategyBuilderPage;

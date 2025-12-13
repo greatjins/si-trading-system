@@ -28,6 +28,7 @@ class BacktestResultModel(Base):
     profit_factor = Column(Float, nullable=False)
     total_trades = Column(Integer, nullable=False)
     equity_curve = Column(JSON, nullable=True)
+    equity_timestamps = Column(JSON, nullable=True)  # 자산 곡선 타임스탬프
     created_at = Column(DateTime, default=datetime.now)
     
     def __repr__(self) -> str:
@@ -97,17 +98,35 @@ class StockMasterModel(Base):
     name = Column(String(100), nullable=False)
     market = Column(String(20), nullable=True)  # KOSPI, KOSDAQ
     sector = Column(String(50), nullable=True)
+    
+    # 가격 정보
     current_price = Column(Float, nullable=True)
     volume_amount = Column(BigInteger, nullable=True)  # 거래대금 (BIGINT)
     high_52w = Column(Float, nullable=True)  # 52주 최고가
     low_52w = Column(Float, nullable=True)   # 52주 최저가
     price_position = Column(Float, nullable=True)  # 현재가 / 52주 최고가
+    
+    # 재무 지표 (t3320)
+    market_cap = Column(Float, nullable=True)  # 시가총액
+    shares = Column(Float, nullable=True)  # 주식수
+    per = Column(Float, nullable=True)  # PER
+    pbr = Column(Float, nullable=True)  # PBR
+    eps = Column(Float, nullable=True)  # EPS
+    bps = Column(Float, nullable=True)  # BPS
+    roe = Column(Float, nullable=True)  # ROE
+    roa = Column(Float, nullable=True)  # ROA
+    
+    # 추가 재무 지표
+    dividend_yield = Column(Float, nullable=True)  # 배당수익률
+    foreign_ratio = Column(Float, nullable=True)  # 외국인지분율
+    
+    # 메타 정보
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     
     def __repr__(self) -> str:
-        return f"<StockMaster(symbol={self.symbol}, name={self.name}, volume={self.volume_amount})>"
+        return f"<StockMaster(symbol={self.symbol}, name={self.name}, PER={self.per}, PBR={self.pbr})>"
 
 
 class StockUniverseModel(Base):
@@ -142,3 +161,28 @@ class OHLCModel(Base):
     
     def __repr__(self) -> str:
         return f"<OHLC(symbol={self.symbol}, interval={self.interval}, timestamp={self.timestamp}, close={self.close})>"
+
+
+class DataCollectionJobModel(Base):
+    """데이터 수집 작업 테이블"""
+    __tablename__ = "data_collection_jobs"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    status = Column(String(20), nullable=False, default="running")  # running, completed, stopped, error
+    current_symbol = Column(String(100), nullable=True)
+    progress = Column(Integer, default=0)
+    total = Column(Integer, default=0)
+    logs = Column(JSON, nullable=True)  # 로그 배열
+    error = Column(Text, nullable=True)
+    
+    # 수집 설정
+    count = Column(Integer, nullable=False)
+    days = Column(Integer, nullable=False)
+    strategy = Column(String(20), nullable=False)
+    volume_ratio = Column(Float, nullable=True)
+    
+    started_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+    
+    def __repr__(self) -> str:
+        return f"<DataCollectionJob(id={self.id}, status={self.status}, progress={self.progress}/{self.total})>"

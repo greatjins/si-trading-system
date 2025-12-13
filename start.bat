@@ -1,21 +1,21 @@
 @echo off
-REM LS HTS 플랫폼 시작 스크립트 (CMD)
+REM HTS 플랫폼 시작 스크립트 (CMD)
 
 echo ========================================
-echo    LS HTS 플랫폼 시작
+echo    HTS 플랫폼 시작
 echo ========================================
 echo.
 
 REM 백엔드 시작
 echo [1/2] 백엔드 서버 시작 중...
-start "LS HTS Backend" cmd /k "uvicorn api.main:app --reload --host 0.0.0.0 --port 8000"
+start "HTS Backend" cmd /k "uvicorn api.main:app --reload --host 0.0.0.0 --port 8000"
 
 REM 잠시 대기
 timeout /t 3 /nobreak >nul
 
 REM 프론트엔드 시작
 echo [2/2] 프론트엔드 서버 시작 중...
-start "LS HTS Frontend" cmd /k "cd frontend && npm run dev"
+start "HTS Frontend" cmd /k "cd frontend && npm run dev"
 
 REM 잠시 대기 후 브라우저 열기
 timeout /t 5 /nobreak >nul

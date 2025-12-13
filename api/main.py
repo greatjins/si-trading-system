@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder, accounts, data_collection
+from api.routes import account, orders, strategy, strategies, backtest, price, auth, websocket, strategy_builder, accounts, data_collection, backtest_results
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -82,9 +82,14 @@ app.include_router(orders.router, prefix="/api/orders", tags=["주문"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["전략 실행"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["전략 관리"])
 app.include_router(backtest.router, prefix="/api/backtest", tags=["백테스트"])
+app.include_router(backtest_results.router, prefix="/api/backtest", tags=["백테스트 결과"])
 app.include_router(price.router, prefix="/api/price", tags=["시세"])
 app.include_router(strategy_builder.router, prefix="/api/strategy-builder", tags=["전략 빌더"])
 app.include_router(data_collection.router, tags=["데이터 수집"])
+
+# 고급 기능 라우터
+from api.routes import advanced_backtest
+app.include_router(advanced_backtest.router, prefix="/api/advanced-backtest", tags=["고급 백테스트"])
 
 
 @app.on_event("startup")

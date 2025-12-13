@@ -48,6 +48,8 @@ export default function DataCollection() {
   });
   const [count, setCount] = useState(200);
   const [days, setDays] = useState(180);
+  const [strategy, setStrategy] = useState('mixed');
+  const [volumeRatio, setVolumeRatio] = useState(0.5);
   const [page, setPage] = useState(1);
   const [totalStocks, setTotalStocks] = useState(0);
   const itemsPerPage = 50;
@@ -69,12 +71,31 @@ export default function DataCollection() {
         
         wasRunning = data.is_running;
         setStatus(data);
+        
+        // 로컬 스토리지에 상태 저장 (페이지 이동 시 복원용)
+        if (data.is_running) {
+          localStorage.setItem('data_collection_running', 'true');
+        } else {
+          localStorage.removeItem('data_collection_running');
+        }
       } catch (error) {
         console.error('Failed to fetch status:', error);
       }
     }, 1000);
 
     return () => clearInterval(interval);
+  }, []);
+  
+  // 페이지 로드 시 수집 중이었는지 확인
+  useEffect(() => {
+    const wasRunning = localStorage.getItem('data_collection_running');
+    if (wasRunning === 'true') {
+      // 즉시 상태 확인
+      fetch('/api/data/collect/status')
+        .then(res => res.json())
+        .then(data => setStatus(data))
+        .catch(console.error);
+    }
   }, []);
 
   // 초기 데이터 로드
@@ -110,7 +131,12 @@ export default function DataCollection() {
       await fetch('/api/data/collect/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count, days }),
+        body: JSON.stringify({ 
+          count, 
+          days, 
+          strategy,
+          volume_ratio: volumeRatio 
+        }),
       });
     } catch (error) {
       console.error('Failed to start collection:', error);
@@ -179,6 +205,25 @@ export default function DataCollection() {
           
           <div className="form-row">
             <div className="form-group">
+              <label>수집 전략</label>
+              <select
+                value={strategy}
+                onChange={(e) => setStrategy(e.target.value)}
+                disabled={status.is_running}
+                className="form-input"
+              >
+                <option value="mixed">혼합 (거래대금 + 등락율)</option>
+                <option value="volume_only">거래대금 상위만</option>
+                <option value="change_only">등락율 상위만</option>
+              </select>
+              <small>
+                {strategy === 'mixed' && '거래대금과 등락율을 조합하여 수집'}
+                {strategy === 'volume_only' && '거래대금 상위 종목만 수집'}
+                {strategy === 'change_only' && '등락율 상위 종목만 수집 (상승+하락)'}
+              </small>
+            </div>
+            
+            <div className="form-group">
               <label>수집 종목 수</label>
               <input
                 type="number"
@@ -189,8 +234,34 @@ export default function DataCollection() {
                 min="1"
                 max="500"
               />
-              <small>거래대금 상위 종목 (최대 500)</small>
+              <small>최대 500개 (중복 제거 후 실제 수는 적을 수 있음)</small>
             </div>
+          </div>
+
+          <div className="form-row">
+            {strategy === 'mixed' && (
+              <div className="form-group">
+                <label>거래대금 비율</label>
+                <input
+                  type="range"
+                  value={volumeRatio}
+                  onChange={(e) => setVolumeRatio(Number(e.target.value))}
+                  disabled={status.is_running}
+                  className="form-input"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  style={{ width: '100%' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#666' }}>
+                  <span>거래대금: {(volumeRatio * 100).toFixed(0)}%</span>
+                  <span>등락율: {((1 - volumeRatio) * 100).toFixed(0)}%</span>
+                </div>
+                <small>
+                  거래대금 {Math.round(count * volumeRatio)}개 + 등락율 {Math.round(count * (1 - volumeRatio))}개
+                </small>
+              </div>
+            )}
             
             <div className="form-group">
               <label>수집 기간 (일)</label>

@@ -71,7 +71,7 @@ class BacktestRequest(BaseModel):
     """백테스트 요청"""
     strategy_name: str
     parameters: Dict[str, Any]
-    symbol: str
+    symbol: Optional[str] = None  # 단일 종목 전략용 (포트폴리오 전략은 None)
     interval: str = "1d"
     start_date: datetime
     end_date: datetime

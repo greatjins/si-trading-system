@@ -1,0 +1,174 @@
+.performanceListContainer {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  overflow: hidden;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.performanceTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 800px;
+}
+
+.performanceTable th,
+.performanceTable td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.performanceTable th {
+  background: #f8f9fa;
+  font-weight: 600;
+  color: #333;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.sortableHeader {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s;
+  position: relative;
+}
+
+.sortableHeader:hover {
+  background: #e9ecef;
+}
+
+.numberColumn {
+  text-align: right;
+}
+
+.sortIcon {
+  margin-left: 8px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.sortIcon.active {
+  opacity: 1;
+  color: #2196f3;
+}
+
+.performanceRow {
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.performanceRow:hover {
+  background-color: #f8f9fa;
+}
+
+.performanceRow:active {
+  background-color: #e9ecef;
+}
+
+.symbolCell {
+  font-weight: 600;
+}
+
+.symbolCode {
+  font-family: 'Courier New', monospace;
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.nameCell {
+  max-width: 150px;
+}
+
+.symbolName {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.numberCell {
+  text-align: right;
+  font-weight: 500;
+}
+
+.positive {
+  color: #4caf50;
+}
+
+.negative {
+  color: #f44336;
+}
+
+.goodRate {
+  color: #4caf50;
+}
+
+.poorRate {
+  color: #ff9800;
+}
+
+.goodRatio {
+  color: #4caf50;
+}
+
+.poorRatio {
+  color: #f44336;
+}
+
+.loadingMessage,
+.noDataMessage {
+  text-align: center;
+  padding: 60px 20px;
+  color: #666;
+  font-size: 16px;
+}
+
+.summaryInfo {
+  display: flex;
+  justify-content: space-around;
+  padding: 20px;
+  background: #f8f9fa;
+  border-top: 1px solid #e0e0e0;
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.summaryItem .label {
+  font-size: 12px;
+  color: #666;
+}
+
+.summaryItem .value {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .performanceTable th,
+  .performanceTable td {
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+
+  .summaryInfo {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .summaryItem {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+}

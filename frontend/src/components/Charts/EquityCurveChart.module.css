@@ -1,0 +1,92 @@
+.equityChartContainer {
+  position: relative;
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.noDataMessage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #666;
+  font-size: 16px;
+}
+
+.equityTooltip {
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.tooltipDate {
+  margin: 0 0 8px 0;
+  font-weight: 600;
+  color: #333;
+}
+
+.tooltipEquity,
+.tooltipReturn,
+.tooltipDrawdown {
+  margin: 4px 0;
+  font-size: 14px;
+  color: #666;
+}
+
+.tooltipEquity .value,
+.tooltipReturn .value,
+.tooltipDrawdown .value {
+  font-weight: 600;
+}
+
+.value.positive {
+  color: #4caf50;
+}
+
+.value.negative {
+  color: #f44336;
+}
+
+.chartInfo {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 20px;
+  padding: 20px 0;
+  border-top: 1px solid #e0e0e0;
+  position: relative;
+  z-index: 1;
+  background: white;
+}
+
+.infoItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.infoItem .label {
+  font-size: 12px;
+  color: #666;
+}
+
+.infoItem .value {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .chartInfo {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .infoItem {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+}

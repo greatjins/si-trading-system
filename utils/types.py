@@ -170,6 +170,7 @@ class BacktestResult:
     profit_factor: float
     total_trades: int
     equity_curve: List[float]
+    equity_timestamps: List[datetime]  # 자산 곡선 타임스탬프
     trades: List[Trade]
 
     def summary(self) -> Dict[str, Any]:
@@ -184,3 +185,66 @@ class BacktestResult:
             "profit_factor": f"{self.profit_factor:.2f}",
             "total_trades": self.total_trades
         }
+
+
+@dataclass
+class CompletedTrade:
+    """완결된 거래 (매수 → 매도)"""
+    symbol: str
+    entry_date: datetime
+    entry_price: float
+    entry_quantity: int
+    exit_date: datetime
+    exit_price: float
+    exit_quantity: int
+    pnl: float  # 손익 (원)
+    return_pct: float  # 수익률 (%)
+    holding_period: int  # 보유 기간 (일)
+    commission: float  # 수수료
+
+    def is_profitable(self) -> bool:
+        """수익 거래 여부"""
+        return self.pnl > 0
+
+
+@dataclass
+class SymbolPerformance:
+    """종목별 성과"""
+    symbol: str
+    name: str
+    total_return: float  # 총 수익률 (%)
+    trade_count: int  # 거래 횟수
+    win_rate: float  # 승률 (%)
+    profit_factor: float  # 손익비
+    avg_holding_period: int  # 평균 보유 기간 (일)
+    total_pnl: float  # 총 손익 (원)
+
+
+@dataclass
+class SymbolDetail:
+    """종목 상세 정보"""
+    symbol: str
+    name: str
+    metrics: SymbolPerformance
+    completed_trades: List[CompletedTrade]
+    all_trades: List[Trade]  # 원본 거래 기록
+
+
+@dataclass
+class BacktestResultDetail:
+    """백테스트 결과 상세 (시각화용)"""
+    backtest_id: int
+    strategy_name: str
+    start_date: datetime
+    end_date: datetime
+    initial_capital: float
+    final_equity: float
+    total_return: float
+    mdd: float
+    sharpe_ratio: float
+    win_rate: float
+    profit_factor: float
+    total_trades: int
+    equity_curve: List[float]
+    equity_timestamps: List[datetime]
+    symbol_performances: List[SymbolPerformance]

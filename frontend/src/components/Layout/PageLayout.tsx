@@ -2,7 +2,8 @@
  * 공통 페이지 레이아웃
  */
 import { ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { authService } from '../../services/auth';
 
 interface PageLayoutProps {
   children: ReactNode;
@@ -12,12 +13,20 @@ interface PageLayoutProps {
 
 export const PageLayout = ({ children, title, description }: PageLayoutProps) => {
   const location = useLocation();
+  const navigate = useNavigate();
   
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (confirm('로그아웃 하시겠습니까?')) {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-      window.location.href = '/login';
+      try {
+        console.log('🚪 로그아웃 시작...');
+        await authService.logout();
+        console.log('✅ 로그아웃 완료');
+        navigate('/login', { replace: true });
+      } catch (error) {
+        console.error('❌ 로그아웃 오류:', error);
+        // 오류가 발생해도 클라이언트 세션은 정리됨
+        navigate('/login', { replace: true });
+      }
     }
   };
   

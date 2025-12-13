@@ -1,10 +1,9 @@
 /**
  * 로그인 페이지
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { httpClient } from '../services/http';
-import { ENDPOINTS } from '../services/endpoints';
+import { authService } from '../services/auth';
 
 export const LoginPage = () => {
   const navigate = useNavigate();
@@ -13,25 +12,37 @@ export const LoginPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
+  // 이미 로그인된 경우 대시보드로 리다이렉트
+  useEffect(() => {
+    if (authService.isAuthenticated()) {
+      console.log('✅ 이미 로그인됨 - 대시보드로 이동');
+      navigate('/dashboard', { replace: true });
+    }
+  }, [navigate]);
+  
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
     
     try {
-      const response = await httpClient.post(ENDPOINTS.AUTH.LOGIN, {
-        username,
-        password,
-      });
+      console.log('🔐 로그인 시도:', username);
       
-      const { access_token, refresh_token } = response.data;
+      // 새로운 보안 강화된 인증 서비스 사용
+      const user = await authService.login(username, password);
       
-      localStorage.setItem('access_token', access_token);
-      localStorage.setItem('refresh_token', refresh_token);
+      console.log('✅ 로그인 성공:', user.username);
       
-      navigate('/dashboard');
+      // 저장된 리다이렉트 경로가 있으면 해당 경로로, 없으면 대시보드로
+      const redirectPath = sessionStorage.getItem('redirectPath') || '/dashboard';
+      sessionStorage.removeItem('redirectPath'); // 사용 후 제거
+      
+      console.log('🔄 리다이렉트:', redirectPath);
+      navigate(redirectPath, { replace: true });
+      
     } catch (err) {
-      setError(err instanceof Error ? err.message : '로그인 실패');
+      console.error('❌ 로그인 실패:', err);
+      setError(err instanceof Error ? err.message : '로그인에 실패했습니다. 사용자명과 비밀번호를 확인해주세요.');
     } finally {
       setIsLoading(false);
     }

@@ -4,11 +4,14 @@
 import { RouterProvider } from 'react-router-dom';
 import { router } from '../router';
 import { WebSocketProvider } from '../../services/websocket.tsx';
+import { ErrorBoundary } from '../../components/UI';
 
 export const AppProvider = () => {
   return (
-    <WebSocketProvider>
-      <RouterProvider router={router} />
-    </WebSocketProvider>
+    <ErrorBoundary>
+      <WebSocketProvider>
+        <RouterProvider router={router} />
+      </WebSocketProvider>
+    </ErrorBoundary>
   );
 };

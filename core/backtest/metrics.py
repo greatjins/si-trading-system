@@ -167,7 +167,7 @@ def calculate_sharpe_ratio(
 
 def calculate_win_rate(trades: List[Trade]) -> float:
     """
-    승률 계산
+    승률 계산 (매수-매도 쌍 매칭)
     
     Args:
         trades: 거래 내역
@@ -178,20 +178,52 @@ def calculate_win_rate(trades: List[Trade]) -> float:
     if not trades:
         return 0.0
     
-    # 매도 거래만 (청산)
-    sell_trades = [t for t in trades if t.side == OrderSide.SELL]
+    # 종목별로 거래 그룹화
+    symbol_trades = {}
+    for trade in trades:
+        if trade.symbol not in symbol_trades:
+            symbol_trades[trade.symbol] = []
+        symbol_trades[trade.symbol].append(trade)
     
-    if not sell_trades:
-        return 0.0
+    total_completed_trades = 0
+    winning_trades = 0
     
-    # 손익 계산 (간단히 가격 차이로)
-    wins = 0
-    for i in range(0, len(sell_trades)):
-        # 실제로는 매수-매도 쌍을 매칭해야 하지만, 여기서는 단순화
-        # TODO: 정확한 손익 계산을 위해 매수-매도 매칭 필요
-        wins += 1 if i % 2 == 0 else 0  # 임시
+    # 각 종목별로 매수-매도 쌍 분석
+    for symbol, symbol_trade_list in symbol_trades.items():
+        # 시간순 정렬
+        symbol_trade_list.sort(key=lambda x: x.timestamp)
+        
+        position_quantity = 0
+        position_cost = 0.0
+        
+        for trade in symbol_trade_list:
+            if trade.side == OrderSide.BUY:
+                # 매수: 포지션 증가
+                position_cost += trade.quantity * trade.price + trade.commission
+                position_quantity += trade.quantity
+            
+            elif trade.side == OrderSide.SELL and position_quantity > 0:
+                # 매도: 포지션 감소
+                sell_quantity = min(trade.quantity, position_quantity)
+                
+                # 평균 단가 계산
+                avg_cost_per_share = position_cost / position_quantity if position_quantity > 0 else 0
+                
+                # 손익 계산
+                sell_proceeds = sell_quantity * trade.price - trade.commission
+                sell_cost = sell_quantity * avg_cost_per_share
+                pnl = sell_proceeds - sell_cost
+                
+                # 완결된 거래로 카운트
+                total_completed_trades += 1
+                if pnl > 0:
+                    winning_trades += 1
+                
+                # 포지션 업데이트
+                position_quantity -= sell_quantity
+                position_cost -= sell_cost
     
-    return wins / len(sell_trades) if sell_trades else 0.0
+    return winning_trades / total_completed_trades if total_completed_trades > 0 else 0.0
 
 
 def calculate_profit_factor(trades: List[Trade]) -> float:
@@ -207,34 +239,158 @@ def calculate_profit_factor(trades: List[Trade]) -> float:
     if not trades:
         return 0.0
     
+    # 종목별로 거래 그룹화
+    symbol_trades = {}
+    for trade in trades:
+        if trade.symbol not in symbol_trades:
+            symbol_trades[trade.symbol] = []
+        symbol_trades[trade.symbol].append(trade)
+    
     total_profit = 0.0
     total_loss = 0.0
     
-    # TODO: 정확한 손익 계산
-    # 현재는 단순화된 버전
+    # 각 종목별로 매수-매도 쌍 분석
+    for symbol, symbol_trade_list in symbol_trades.items():
+        # 시간순 정렬
+        symbol_trade_list.sort(key=lambda x: x.timestamp)
+        
+        position_quantity = 0
+        position_cost = 0.0
+        
+        for trade in symbol_trade_list:
+            if trade.side == OrderSide.BUY:
+                # 매수: 포지션 증가
+                position_cost += trade.quantity * trade.price + trade.commission
+                position_quantity += trade.quantity
+            
+            elif trade.side == OrderSide.SELL and position_quantity > 0:
+                # 매도: 포지션 감소
+                sell_quantity = min(trade.quantity, position_quantity)
+                
+                # 평균 단가 계산
+                avg_cost_per_share = position_cost / position_quantity if position_quantity > 0 else 0
+                
+                # 손익 계산
+                sell_proceeds = sell_quantity * trade.price - trade.commission
+                sell_cost = sell_quantity * avg_cost_per_share
+                pnl = sell_proceeds - sell_cost
+                
+                # 이익/손실 누적
+                if pnl > 0:
+                    total_profit += pnl
+                else:
+                    total_loss += abs(pnl)
+                
+                # 포지션 업데이트
+                position_quantity -= sell_quantity
+                position_cost -= sell_cost
     
-    return total_profit / total_loss if total_loss > 0 else 0.0
+    return total_profit / total_loss if total_loss > 0 else (float('inf') if total_profit > 0 else 0.0)
 
 
 def calculate_avg_win(trades: List[Trade]) -> float:
     """평균 수익 거래"""
-    # TODO: 구현
-    return 0.0
+    if not trades:
+        return 0.0
+    
+    profits = _get_trade_pnls(trades)
+    winning_trades = [pnl for pnl in profits if pnl > 0]
+    
+    return np.mean(winning_trades) if winning_trades else 0.0
 
 
 def calculate_avg_loss(trades: List[Trade]) -> float:
     """평균 손실 거래"""
-    # TODO: 구현
-    return 0.0
+    if not trades:
+        return 0.0
+    
+    profits = _get_trade_pnls(trades)
+    losing_trades = [pnl for pnl in profits if pnl < 0]
+    
+    return np.mean(losing_trades) if losing_trades else 0.0
 
 
 def calculate_max_consecutive_wins(trades: List[Trade]) -> int:
     """최대 연속 수익 거래"""
-    # TODO: 구현
-    return 0
+    if not trades:
+        return 0
+    
+    profits = _get_trade_pnls(trades)
+    
+    max_consecutive = 0
+    current_consecutive = 0
+    
+    for pnl in profits:
+        if pnl > 0:
+            current_consecutive += 1
+            max_consecutive = max(max_consecutive, current_consecutive)
+        else:
+            current_consecutive = 0
+    
+    return max_consecutive
 
 
 def calculate_max_consecutive_losses(trades: List[Trade]) -> int:
     """최대 연속 손실 거래"""
-    # TODO: 구현
-    return 0
+    if not trades:
+        return 0
+    
+    profits = _get_trade_pnls(trades)
+    
+    max_consecutive = 0
+    current_consecutive = 0
+    
+    for pnl in profits:
+        if pnl < 0:
+            current_consecutive += 1
+            max_consecutive = max(max_consecutive, current_consecutive)
+        else:
+            current_consecutive = 0
+    
+    return max_consecutive
+
+
+def _get_trade_pnls(trades: List[Trade]) -> List[float]:
+    """거래별 손익 계산"""
+    # 종목별로 거래 그룹화
+    symbol_trades = {}
+    for trade in trades:
+        if trade.symbol not in symbol_trades:
+            symbol_trades[trade.symbol] = []
+        symbol_trades[trade.symbol].append(trade)
+    
+    pnls = []
+    
+    # 각 종목별로 매수-매도 쌍 분석
+    for symbol, symbol_trade_list in symbol_trades.items():
+        # 시간순 정렬
+        symbol_trade_list.sort(key=lambda x: x.timestamp)
+        
+        position_quantity = 0
+        position_cost = 0.0
+        
+        for trade in symbol_trade_list:
+            if trade.side == OrderSide.BUY:
+                # 매수: 포지션 증가
+                position_cost += trade.quantity * trade.price + trade.commission
+                position_quantity += trade.quantity
+            
+            elif trade.side == OrderSide.SELL and position_quantity > 0:
+                # 매도: 포지션 감소
+                sell_quantity = min(trade.quantity, position_quantity)
+                
+                # 평균 단가 계산
+                avg_cost_per_share = position_cost / position_quantity if position_quantity > 0 else 0
+                
+                # 손익 계산
+                sell_proceeds = sell_quantity * trade.price - trade.commission
+                sell_cost = sell_quantity * avg_cost_per_share
+                pnl = sell_proceeds - sell_cost
+                
+                pnls.append(pnl)
+                
+                # 포지션 업데이트
+                position_quantity -= sell_quantity
+                position_cost -= sell_cost
+    
+    return pnls
