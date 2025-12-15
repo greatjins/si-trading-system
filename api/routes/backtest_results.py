@@ -50,7 +50,17 @@ async def get_backtest_result(backtest_id: int) -> dict:
         
         logger.info(f"Found backtest: {backtest.strategy_name}")
         
-        # 2. 기본 응답 생성
+        # 2. MDD 재계산으로 일관성 확보
+        calculated_mdd = backtest.mdd  # 기본값
+        if backtest.equity_curve and len(backtest.equity_curve) >= 2:
+            from core.backtest.metrics import calculate_mdd
+            calculated_mdd = calculate_mdd(backtest.equity_curve)
+            
+            # 저장된 값과 차이가 큰 경우 로그
+            if abs(calculated_mdd - backtest.mdd) > 0.01:  # 1% 이상 차이
+                logger.warning(f"MDD 불일치 감지 - 저장값: {backtest.mdd:.4f}, 계산값: {calculated_mdd:.4f}")
+        
+        # 기본 응답 생성 (재계산된 MDD 사용)
         response = {
             "backtest_id": backtest.id,
             "strategy_name": backtest.strategy_name,
@@ -60,7 +70,7 @@ async def get_backtest_result(backtest_id: int) -> dict:
             "initial_capital": backtest.initial_capital,
             "final_equity": backtest.final_equity,
             "total_return": backtest.total_return,
-            "mdd": backtest.mdd,
+            "mdd": calculated_mdd,  # 재계산된 값 사용
             "sharpe_ratio": backtest.sharpe_ratio,
             "win_rate": backtest.win_rate,
             "profit_factor": backtest.profit_factor,
@@ -164,7 +174,7 @@ async def get_backtest_result(backtest_id: int) -> dict:
                             "total_return": round(perf.total_return, 2),
                             "trade_count": perf.trade_count,
                             "win_rate": round(perf.win_rate, 1),
-                            "profit_factor": round(perf.profit_factor, 2),
+                            "profit_factor": round(perf.profit_factor, 2) if perf.profit_factor != float('inf') else 999.99,
                             "avg_holding_period": perf.avg_holding_period,
                             "total_pnl": round(perf.total_pnl, 2)
                         })
@@ -256,7 +266,7 @@ async def get_symbol_performance(backtest_id: int) -> List[dict]:
                 "total_return": round(perf.total_return, 2),
                 "trade_count": perf.trade_count,
                 "win_rate": round(perf.win_rate, 1),
-                "profit_factor": round(perf.profit_factor, 2),
+                "profit_factor": round(perf.profit_factor, 2) if perf.profit_factor != float('inf') else 999.99,
                 "avg_holding_period": perf.avg_holding_period,
                 "total_pnl": round(perf.total_pnl, 2)
             })
@@ -346,7 +356,7 @@ async def get_symbol_detail(backtest_id: int, symbol: str) -> dict:
             "total_return": round(metrics.total_return, 2),
             "trade_count": metrics.trade_count,
             "win_rate": round(metrics.win_rate, 1),
-            "profit_factor": round(metrics.profit_factor, 2),
+                "profit_factor": round(metrics.profit_factor, 2) if metrics.profit_factor != float('inf') else 999.99,
             "avg_holding_period": metrics.avg_holding_period,
             "total_pnl": round(metrics.total_pnl, 2),
             "avg_buy_price": round(avg_buy_price, 2),
@@ -487,7 +497,7 @@ async def compare_backtests(backtest_ids: List[int]) -> dict:
                 "mdd": round(bt.mdd, 4),
                 "sharpe_ratio": round(bt.sharpe_ratio, 4),
                 "win_rate": round(bt.win_rate, 2),
-                "profit_factor": round(bt.profit_factor, 2),
+                "profit_factor": round(bt.profit_factor, 2) if bt.profit_factor != float('inf') else 999.99,
                 "total_trades": bt.total_trades,
                 "equity_curve": bt.equity_curve
             })

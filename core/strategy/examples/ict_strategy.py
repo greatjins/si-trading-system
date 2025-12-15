@@ -440,21 +440,48 @@ class ICTStrategy(BaseStrategy):
         direction: str
     ) -> int:
         """
-        ICT 리스크 관리 기반 포지션 사이징
+        안전한 포지션 사이징 (MDD 최소화)
         """
-        risk_amount = equity * self.risk_per_trade
+        # 🔧 극도로 보수적인 접근 (MDD 94% 문제 해결)
         
-        # 스탑로스 거리 계산 (ATR 기반)
-        stop_distance = price * 0.02  # 2% 기본 스탑
+        # 1. 최대 투자 금액: 자본의 5% (기존 10%에서 축소)
+        max_investment = equity * 0.05
         
-        if stop_distance <= 0:
-            return 0
+        # 2. 리스크 기반 계산
+        risk_amount = equity * self.risk_per_trade  # 자본의 2%
+        stop_loss_pct = 0.03  # 3% 스탑로스 (기존 2%에서 확대)
         
-        # 포지션 크기 = 리스크 금액 / 스탑 거리
-        position_value = risk_amount / (stop_distance / price)
-        quantity = int(position_value / price)
+        # 3. 리스크 기반 포지션 가치 계산
+        # 리스크 금액 / 스탑로스 비율 = 최대 포지션 가치
+        risk_based_investment = risk_amount / stop_loss_pct
         
-        return max(1, quantity)
+        # 4. 더 보수적인 값 선택
+        safe_investment = min(max_investment, risk_based_investment)
+        
+        # 5. 추가 안전장치: 현금 보유량 확인
+        # 전체 자본의 80%는 현금으로 보유 (20%만 투자)
+        max_total_investment = equity * 0.2
+        safe_investment = min(safe_investment, max_total_investment)
+        
+        # 6. 수수료 고려한 실제 가격
+        commission_rate = 0.0015  # 0.15%
+        slippage_rate = 0.0005   # 0.05%
+        effective_price = price * (1 + commission_rate + slippage_rate)
+        
+        # 7. 수량 계산
+        quantity = int(safe_investment / effective_price)
+        
+        # 8. 최종 안전장치
+        min_quantity = 1
+        max_quantity = int((equity * 0.05) / effective_price)  # 절대 5% 초과 금지
+        
+        final_quantity = max(min_quantity, min(quantity, max_quantity))
+        
+        # 9. 로깅 (디버깅용)
+        investment_ratio = (final_quantity * effective_price) / equity
+        logger.debug(f"Position sizing - Equity: {equity:,.0f}, Investment: {final_quantity * effective_price:,.0f} ({investment_ratio:.1%})")
+        
+        return final_quantity
     
     def _find_swing_points(self, series: pd.Series, point_type: str) -> List[float]:
         """

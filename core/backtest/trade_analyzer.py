@@ -146,17 +146,30 @@ class TradeAnalyzer:
         # 손익비 계산 (총 이익 / 총 손실)
         total_profit = sum(t.pnl for t in completed_trades if t.pnl > 0)
         total_loss = abs(sum(t.pnl for t in completed_trades if t.pnl < 0))
-        profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
+        
+        # 손실이 없으면 무한대 대신 매우 큰 값 사용 (JSON 직렬화 문제 방지)
+        if total_loss > 0:
+            profit_factor = total_profit / total_loss
+        else:
+            # 손실이 없으면 손익비를 매우 큰 값으로 설정 (실제로는 무한대)
+            # JSON 직렬화를 위해 float('inf') 대신 큰 값 사용
+            profit_factor = 999.99 if total_profit > 0 else 0.0
         
         # 평균 보유 기간
         avg_holding_period = int(sum(t.holding_period for t in completed_trades) / trade_count)
         
-        # 총 수익률 계산 (누적)
-        # 각 거래의 수익률을 곱하여 누적 수익률 계산
-        cumulative_return = 1.0
-        for trade in completed_trades:
-            cumulative_return *= (1 + trade.return_pct / 100)
-        total_return = (cumulative_return - 1) * 100
+        # 총 수익률 계산 (총 투자 대비 총 손익)
+        # 각 거래의 투자 금액(매수 금액) 합계 계산
+        total_investment = sum(
+            t.entry_price * t.entry_quantity + (t.commission / 2)  # 매수 수수료 포함
+            for t in completed_trades
+        )
+        
+        # 총 수익률 = (총 손익 / 총 투자 금액) * 100
+        if total_investment > 0:
+            total_return = (total_pnl / total_investment) * 100
+        else:
+            total_return = 0.0
         
         return SymbolPerformance(
             symbol=symbol,

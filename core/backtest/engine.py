@@ -506,27 +506,38 @@ class BacktestEngine:
             commission_cost = order_value * self.commission
             total_cost = order_value + commission_cost
             
-            # 🔒 리스크 관리: 잔액 확인 및 최대 투자 한도
-            available_cash = max(0, self.cash)  # 마이너스 방지
-            max_investment = available_cash * 0.95  # 95%만 투자 (안전 마진)
+            # 🔒 강화된 리스크 관리: 잔액 확인 및 자동 수량 조정
+            available_cash = max(0, self.cash)
             
+            # 잔액 부족 시 자동 수량 조정
             if total_cost > available_cash:
-                logger.warning(f"잔액 부족: 필요 {total_cost:,.0f}, 보유 {available_cash:,.0f}")
-                return
-            
-            if total_cost > max_investment:
-                # 투자 가능 금액으로 수량 조정
+                # 사용 가능한 현금의 80%로 수량 조정 (기존 95%에서 축소)
+                max_investment = available_cash * 0.8
                 adjusted_quantity = int(max_investment / (execution_price * (1 + self.commission)))
+                
                 if adjusted_quantity <= 0:
-                    logger.warning(f"투자 가능 수량 없음: {signal.symbol}")
+                    logger.debug(f"투자 가능 수량 없음: {signal.symbol} (현금: {available_cash:,.0f})")
                     return
                 
+                # 수량 조정 적용
+                original_quantity = signal.quantity
                 signal.quantity = adjusted_quantity
                 order_value = signal.quantity * execution_price
                 commission_cost = order_value * self.commission
                 total_cost = order_value + commission_cost
                 
-                logger.info(f"수량 조정: {signal.symbol}, {adjusted_quantity}주로 조정")
+                logger.debug(f"수량 자동 조정: {signal.symbol} {original_quantity}주 → {adjusted_quantity}주")
+            
+            # 🚨 추가 안전장치: 단일 거래 최대 투자 한도
+            max_single_investment = self.initial_capital * 0.1  # 초기 자본의 10%
+            if total_cost > max_single_investment:
+                safe_quantity = int(max_single_investment / (execution_price * (1 + self.commission)))
+                if safe_quantity < signal.quantity:
+                    logger.warning(f"단일 거래 한도 초과로 수량 조정: {signal.quantity}주 → {safe_quantity}주")
+                    signal.quantity = safe_quantity
+                    order_value = signal.quantity * execution_price
+                    commission_cost = order_value * self.commission
+                    total_cost = order_value + commission_cost
             
             # 포지션 진입
             trade = self.position_manager.open_position(
@@ -627,40 +638,66 @@ class BacktestEngine:
         return df
     
     def _update_equity(self, timestamp: datetime) -> None:
-        """자산 곡선 업데이트 (안전성 강화)"""
-        unrealized_pnl = self.position_manager.get_total_unrealized_pnl()
+        """자산 곡선 업데이트 (정확한 MDD 계산을 위한 수정)"""
+        # 포지션 가치 계산
+        position_value = self.position_manager.get_total_position_value()
         
-        # 🔒 자산 계산 안전성 확보
-        cash_safe = max(0, self.cash)  # 마이너스 현금 방지
-        equity_raw = cash_safe + unrealized_pnl
+        # 실제 자산 = 현금 + 포지션 가치 (음수 허용)
+        self.equity = self.cash + position_value
         
-        # 최소 자산 보장 (완전 파산 방지)
-        self.equity = max(0, equity_raw)
-        
+        # 자산 곡선에 실제 값 기록 (MDD 계산의 정확성을 위해)
         self.equity_curve.append(self.equity)
         self.equity_timestamps.append(timestamp)
         
-        # 🚨 위험 신호 감지
+        # 🚨 위험 신호 감지 (로깅용)
         if self.equity < self.initial_capital * 0.5:  # 50% 이상 손실
             logger.warning(f"⚠️ 큰 손실 발생: {timestamp.date()}, 자산: {self.equity:,.0f} ({(self.equity/self.initial_capital-1)*100:.1f}%)")
         
         if self.cash < 0:
-            logger.error(f"🚨 마이너스 현금 발생: {timestamp.date()}, 현금: {self.cash:,.0f}")
+            logger.warning(f"⚠️ 마이너스 현금: {timestamp.date()}, 현금: {self.cash:,.0f}")
         
-        logger.debug(f"자산 업데이트: {timestamp.date()}, 현금: {cash_safe:,.0f}, 미실현: {unrealized_pnl:,.0f}, 총자산: {self.equity:,.0f}")
+        # 극단적 손실 체크 (99% 이상 손실 시 백테스트 중단)
+        if self.equity < self.initial_capital * 0.01:
+            logger.error(f"🚨 극단적 손실로 백테스트 중단: {timestamp.date()}, 자산: {self.equity:,.0f}")
+            raise RuntimeError(f"Extreme loss detected: {self.equity/self.initial_capital:.1%}")
+        
+        logger.debug(f"자산 업데이트: {timestamp.date()}, 현금: {self.cash:,.0f}, 포지션가치: {position_value:,.0f}, 총자산: {self.equity:,.0f}")
     
     def _generate_result(self, start_date: datetime, end_date: datetime) -> BacktestResult:
-        """백테스트 결과 생성"""
+        """백테스트 결과 생성 (검증 로직 포함)"""
         from core.backtest.metrics import calculate_metrics
         
-        # 디버깅 로그 추가
-        logger.info(f"Generating result: Equity curve length: {len(self.equity_curve)}, Timestamps: {len(self.equity_timestamps)}")
+        # 자산 곡선 검증
+        logger.info(f"=== 백테스트 결과 생성 ===")
+        logger.info(f"자산 곡선 길이: {len(self.equity_curve)}")
+        logger.info(f"초기 자본: {self.initial_capital:,.0f}")
+        logger.info(f"최종 자산: {self.equity:,.0f}")
         
+        if self.equity_curve:
+            min_equity = min(self.equity_curve)
+            max_equity = max(self.equity_curve)
+            logger.info(f"자산 범위: {min_equity:,.0f} ~ {max_equity:,.0f}")
+            
+            # 비정상적인 자산 곡선 감지
+            if min_equity <= 0:
+                logger.warning(f"⚠️ 음수 자산 감지: 최소값 {min_equity:,.0f}")
+            
+            if max_equity > self.initial_capital * 10:
+                logger.warning(f"⚠️ 과도한 수익 감지: 최대값 {max_equity:,.0f} (초기 자본의 {max_equity/self.initial_capital:.1f}배)")
+        
+        # 메트릭 계산
         metrics = calculate_metrics(
             equity_curve=self.equity_curve,
             trades=self.all_trades,
             initial_capital=self.initial_capital
         )
+        
+        # MDD 검증
+        if metrics["mdd"] > 0.8:  # 80% 이상 MDD
+            logger.error(f"🚨 비정상적인 MDD 감지: {metrics['mdd']:.2%}")
+            logger.error(f"자산 곡선 샘플: {self.equity_curve[:5]} ... {self.equity_curve[-5:]}")
+        
+        logger.info(f"계산된 메트릭: 총수익률={metrics['total_return']:.2%}, MDD={metrics['mdd']:.2%}, 샤프={metrics['sharpe_ratio']:.2f}")
         
         return BacktestResult(
             strategy_name=self.strategy.name,

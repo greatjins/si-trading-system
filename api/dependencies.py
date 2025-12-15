@@ -57,8 +57,8 @@ def get_db():
         db.close()
 
 
-def get_current_user(current_user: User = Depends(get_current_active_user)) -> User:
-    """현재 사용자 가져오기"""
+def get_current_user(current_user: dict = Depends(get_current_active_user)) -> dict:
+    """현재 사용자 가져오기 (dict 형태)"""
     return current_user
 
 

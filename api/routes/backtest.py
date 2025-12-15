@@ -447,8 +447,17 @@ async def get_backtest_results(limit: int = 100, offset: int = 0):
         
         logger.info(f"Returning {len(results)} backtest results (limit={limit}, offset={offset})")
         
-        return [
-            BacktestResponse(
+        # MDD 일관성을 위한 재계산
+        from core.backtest.metrics import calculate_mdd
+        
+        response_list = []
+        for r in results:
+            # MDD 재계산 (자산 곡선이 있는 경우)
+            calculated_mdd = r.mdd  # 기본값
+            if r.equity_curve and len(r.equity_curve) >= 2:
+                calculated_mdd = calculate_mdd(r.equity_curve)
+            
+            response_list.append(BacktestResponse(
                 backtest_id=r.id,
                 strategy_name=r.strategy_name,
                 parameters=r.parameters,
@@ -457,15 +466,15 @@ async def get_backtest_results(limit: int = 100, offset: int = 0):
                 initial_capital=r.initial_capital,
                 final_equity=r.final_equity,
                 total_return=r.total_return,
-                mdd=r.mdd,
+                mdd=calculated_mdd,  # 재계산된 값 사용
                 sharpe_ratio=r.sharpe_ratio,
                 win_rate=r.win_rate,
                 profit_factor=r.profit_factor,
                 total_trades=r.total_trades,
                 created_at=r.created_at
-            )
-            for r in results
-        ]
+            ))
+        
+        return response_list
     
     except Exception as e:
         logger.error(f"Failed to get backtest results: {e}")

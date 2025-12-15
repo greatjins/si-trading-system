@@ -175,14 +175,14 @@ export const SymbolDetailModal: React.FC<SymbolDetailModalProps> = ({
           <div className="symbol-info">
             <h3>📈 {symbolDetail.symbol} - {symbolDetail.name}</h3>
             <div className="symbol-metrics">
-              <span className={`metric ${symbolDetail.total_return >= 0 ? 'positive' : 'negative'}`}>
-                {symbolDetail.total_return.toFixed(2)}%
+              <span className={`metric ${(symbolDetail.total_return ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                {(symbolDetail.total_return ?? 0).toFixed(2)}%
               </span>
               <span className="metric">
-                {symbolDetail.trade_count}회 거래
+                {symbolDetail.trade_count ?? 0}회 거래
               </span>
               <span className="metric">
-                승률 {symbolDetail.win_rate.toFixed(1)}%
+                승률 {(symbolDetail.win_rate ?? 0).toFixed(1)}%
               </span>
             </div>
           </div>
@@ -235,15 +235,15 @@ export const SymbolDetailModal: React.FC<SymbolDetailModalProps> = ({
                 <div className="info-grid">
                   <div className="info-row">
                     <span>평균 매수가:</span>
-                    <span>{symbolDetail.avg_buy_price.toLocaleString()}원</span>
+                    <span>{(symbolDetail.avg_buy_price ?? 0).toLocaleString()}원</span>
                   </div>
                   <div className="info-row">
                     <span>평균 매도가:</span>
-                    <span>{symbolDetail.avg_sell_price.toLocaleString()}원</span>
+                    <span>{(symbolDetail.avg_sell_price ?? 0).toLocaleString()}원</span>
                   </div>
                   <div className="info-row">
                     <span>평균 보유기간:</span>
-                    <span>{symbolDetail.avg_holding_days.toFixed(1)}일</span>
+                    <span>{(symbolDetail.avg_holding_days ?? 0).toFixed(1)}일</span>
                   </div>
                   <div className="info-row">
                     <span>총 거래 횟수:</span>
@@ -266,20 +266,20 @@ export const SymbolDetailModal: React.FC<SymbolDetailModalProps> = ({
                     </div>
                     <div className="summary-item">
                       <span className="label">승률:</span>
-                      <span className={`value ${symbolDetail.win_rate >= 50 ? 'positive' : 'negative'}`}>
-                        {symbolDetail.win_rate.toFixed(1)}%
+                      <span className={`value ${(symbolDetail.win_rate ?? 0) >= 50 ? 'positive' : 'negative'}`}>
+                        {(symbolDetail.win_rate ?? 0).toFixed(1)}%
                       </span>
                     </div>
                     <div className="summary-item">
                       <span className="label">손익비:</span>
-                      <span className={`value ${symbolDetail.profit_factor >= 1 ? 'positive' : 'negative'}`}>
-                        {symbolDetail.profit_factor.toFixed(2)}
+                      <span className={`value ${(symbolDetail.profit_factor ?? 0) >= 1 ? 'positive' : 'negative'}`}>
+                        {(symbolDetail.profit_factor ?? 0) >= 999 ? '∞' : (symbolDetail.profit_factor ?? 0).toFixed(2)}
                       </span>
                     </div>
                     <div className="summary-item">
                       <span className="label">총 손익:</span>
-                      <span className={`value ${symbolDetail.total_pnl >= 0 ? 'positive' : 'negative'}`}>
-                        {symbolDetail.total_pnl.toLocaleString()}원
+                      <span className={`value ${(symbolDetail.total_pnl ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+                        {(symbolDetail.total_pnl ?? 0).toLocaleString()}원
                       </span>
                     </div>
                   </div>

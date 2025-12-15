@@ -6,6 +6,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PageLayout } from '../components/Layout/PageLayout';
 import { httpClient } from '../services/http';
 import { AdvancedConditionInput } from '../components/StrategyBuilder/AdvancedConditionInput';
+import { IndicatorHelpModal } from '../components/StrategyBuilder/IndicatorHelpModal';
+import '../components/StrategyBuilder/StrategyBuilder.css';
 
 // 타입 안전한 헬퍼 함수들
 const createDefaultConditionValue = (): ConditionValue => ({
@@ -371,6 +373,7 @@ export const StrategyBuilderPage = () => {
   const [activeTab, setActiveTab] = useState<'stock' | 'buy' | 'sell' | 'position' | 'entry'>('stock');
   const [indicators, setIndicators] = useState<IndicatorInfo[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   
   // 지표 목록 로드
   useEffect(() => {
@@ -2686,6 +2689,23 @@ export const StrategyBuilderPage = () => {
           </button>
         </div>
       </div>
+
+      {/* 헬프 버튼 */}
+      <button 
+        className="help-button"
+        onClick={() => setIsHelpModalOpen(true)}
+        title="지표 설명 보기"
+      >
+        ?
+      </button>
+
+      {/* 헬프 모달 */}
+      <IndicatorHelpModal
+        isOpen={isHelpModalOpen}
+        onClose={() => setIsHelpModalOpen(false)}
+        indicators={indicators}
+        categories={categories}
+      />
     </PageLayout>
   );
 };

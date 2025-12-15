@@ -180,6 +180,10 @@ class PositionManager:
         """총 실현 손익"""
         return sum(pos.realized_pnl for pos in self.positions.values())
     
+    def get_total_position_value(self) -> float:
+        """총 포지션 가치 (현재가 기준)"""
+        return sum(pos.total_value() for pos in self.positions.values())
+    
     def get_closed_trades(self) -> List[Trade]:
         """청산된 거래 내역"""
         return self.closed_trades

@@ -5,12 +5,12 @@
 export interface SymbolPerformance {
   symbol: string;
   name: string;
-  total_return: number;
-  trade_count: number;
-  win_rate: number;
-  profit_factor: number;
-  avg_holding_period: number;
-  total_pnl: number;
+  total_return: number | null;
+  trade_count: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  avg_holding_period: number | null;
+  total_pnl: number | null;
 }
 
 export interface CompletedTrade {
@@ -45,14 +45,14 @@ export interface SymbolDetail {
   completed_trades: CompletedTrade[];
   all_trades: TradeRecord[];
   // 편의를 위해 metrics의 필드들을 직접 노출
-  total_return: number;
-  trade_count: number;
-  win_rate: number;
-  profit_factor: number;
-  total_pnl: number;
-  avg_buy_price: number;
-  avg_sell_price: number;
-  avg_holding_days: number;
+  total_return: number | null;
+  trade_count: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  total_pnl: number | null;
+  avg_buy_price: number | null;
+  avg_sell_price: number | null;
+  avg_holding_days: number | null;
 }
 
 export interface OHLC {

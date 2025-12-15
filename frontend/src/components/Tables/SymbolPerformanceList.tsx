@@ -162,24 +162,24 @@ export const SymbolPerformanceList: React.FC<SymbolPerformanceListProps> = ({
                 <td className={styles.nameCell}>
                   <span className={styles.symbolName}>{performance.name}</span>
                 </td>
-                <td className={`${styles.numberCell} ${performance.total_return >= 0 ? styles.positive : styles.negative}`}>
-                  {performance.total_return.toFixed(2)}%
+                <td className={`${styles.numberCell} ${(performance.total_return ?? 0) >= 0 ? styles.positive : styles.negative}`}>
+                  {(performance.total_return ?? 0).toFixed(2)}%
                 </td>
                 <td className={styles.numberCell}>
-                  {performance.trade_count}회
+                  {performance.trade_count ?? 0}회
                 </td>
                 <td className={styles.numberCell}>
-                  <span className={performance.win_rate >= 50 ? styles.goodRate : styles.poorRate}>
-                    {performance.win_rate.toFixed(1)}%
+                  <span className={(performance.win_rate ?? 0) >= 50 ? styles.goodRate : styles.poorRate}>
+                    {(performance.win_rate ?? 0).toFixed(1)}%
                   </span>
                 </td>
                 <td className={styles.numberCell}>
-                  <span className={performance.profit_factor >= 1 ? styles.goodRatio : styles.poorRatio}>
-                    {performance.profit_factor.toFixed(2)}
+                  <span className={(performance.profit_factor ?? 0) >= 1 ? styles.goodRatio : styles.poorRatio}>
+                    {(performance.profit_factor ?? 0) >= 999 ? '∞' : (performance.profit_factor ?? 0).toFixed(2)}
                   </span>
                 </td>
-                <td className={`${styles.numberCell} ${performance.total_pnl >= 0 ? styles.positive : styles.negative}`}>
-                  {performance.total_pnl.toLocaleString()}원
+                <td className={`${styles.numberCell} ${(performance.total_pnl ?? 0) >= 0 ? styles.positive : styles.negative}`}>
+                  {(performance.total_pnl ?? 0).toLocaleString()}원
                 </td>
               </tr>
             ))}
@@ -196,19 +196,19 @@ export const SymbolPerformanceList: React.FC<SymbolPerformanceListProps> = ({
         <div className={styles.summaryItem}>
           <span className="label">수익 종목:</span>
           <span className={`value ${styles.positive}`}>
-            {performances.filter(p => p.total_return > 0).length}개
+            {performances.filter(p => (p.total_return ?? 0) > 0).length}개
           </span>
         </div>
         <div className={styles.summaryItem}>
           <span className="label">손실 종목:</span>
           <span className={`value ${styles.negative}`}>
-            {performances.filter(p => p.total_return < 0).length}개
+            {performances.filter(p => (p.total_return ?? 0) < 0).length}개
           </span>
         </div>
         <div className={styles.summaryItem}>
           <span className="label">평균 수익률:</span>
-          <span className={`value ${performances.reduce((sum, p) => sum + p.total_return, 0) / performances.length >= 0 ? styles.positive : styles.negative}`}>
-            {(performances.reduce((sum, p) => sum + p.total_return, 0) / performances.length).toFixed(2)}%
+          <span className={`value ${performances.reduce((sum, p) => sum + (p.total_return ?? 0), 0) / performances.length >= 0 ? styles.positive : styles.negative}`}>
+            {(performances.reduce((sum, p) => sum + (p.total_return ?? 0), 0) / performances.length).toFixed(2)}%
           </span>
         </div>
       </div>

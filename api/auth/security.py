@@ -21,8 +21,8 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7
 # 비밀번호 해싱
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# HTTP Bearer 토큰
-security = HTTPBearer()
+# HTTP Bearer 토큰 (auto_error=False로 설정하여 수동 처리)
+security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -121,7 +121,7 @@ def decode_token(token: str) -> dict:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> dict:
     """
     현재 사용자 조회 (의존성)
@@ -135,6 +135,13 @@ async def get_current_user(
     Raises:
         HTTPException: 인증 실패
     """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     token = credentials.credentials
     payload = decode_token(token)
     

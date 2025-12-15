@@ -96,28 +96,45 @@ def calculate_total_return(equity_curve: List[float], initial_capital: float) ->
 
 def calculate_mdd(equity_curve: List[float]) -> float:
     """
-    MDD (Maximum Drawdown) 계산
+    MDD (Maximum Drawdown) 계산 (개선된 버전)
     
     Args:
         equity_curve: 자산 곡선
     
     Returns:
-        MDD (소수, 양수)
+        MDD (소수, 양수) - 0.0 ~ 1.0 범위
     """
     if not equity_curve or len(equity_curve) < 2:
         return 0.0
     
-    peak = equity_curve[0]
+    # 유효한 양수 값만 사용 (0 이하 값 제외)
+    valid_equity = [e for e in equity_curve if e > 0]
+    
+    if len(valid_equity) < 2:
+        logger.warning(f"유효한 자산 값이 부족합니다. 전체: {len(equity_curve)}, 유효: {len(valid_equity)}")
+        return 0.0
+    
+    peak = valid_equity[0]
     max_drawdown = 0.0
     
-    for equity in equity_curve:
+    for equity in valid_equity:
+        # 새로운 고점 갱신
         if equity > peak:
             peak = equity
         
-        drawdown = (peak - equity) / peak if peak > 0 else 0.0
-        max_drawdown = max(max_drawdown, drawdown)
+        # 현재 드로우다운 계산
+        if peak > 0:
+            current_drawdown = (peak - equity) / peak
+            max_drawdown = max(max_drawdown, current_drawdown)
     
-    return max_drawdown
+    # MDD는 0~1 사이 값이어야 함
+    mdd_result = min(max_drawdown, 1.0)
+    
+    # 디버깅 로그
+    if mdd_result > 0.5:  # 50% 이상 MDD인 경우 로그
+        logger.warning(f"높은 MDD 감지: {mdd_result:.2%}, 최고점: {peak:,.0f}, 최저점: {min(valid_equity):,.0f}")
+    
+    return mdd_result
 
 
 def calculate_sharpe_ratio(
