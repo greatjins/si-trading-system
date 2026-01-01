@@ -1,0 +1,8 @@
+feat: 전략 타입(is_portfolio) 설정 기능 추가 및 403 에러 처리 개선
+
+- 전략 빌더 UI에 단일 종목/포트폴리오 선택 옵션 추가
+- BaseStrategy.is_portfolio_strategy()에서 params의 is_portfolio 우선 확인
+- StrategyFactory에서 config의 is_portfolio를 parameters에 자동 복사
+- 전략 목록 API에서 is_portfolio 정확도 향상
+- AccountInfo 컴포넌트의 403 에러 처리 개선 (토큰 확인, 자동 중지)
+

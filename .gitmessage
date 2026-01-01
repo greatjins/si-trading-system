@@ -1,0 +1,17 @@
+# 커밋 메시지 템플릿
+# 한글 커밋 메시지는 파일로 작성하여 사용하세요
+#
+# 사용 방법:
+# 1. commit_msg.txt 파일에 한글 메시지 작성
+# 2. git commit -F commit_msg.txt
+# 3. 파일 삭제
+#
+# 예시:
+# feat: 기능 추가
+# fix: 버그 수정
+# docs: 문서 수정
+# style: 코드 포맷팅
+# refactor: 코드 리팩토링
+# test: 테스트 추가
+# chore: 빌드 업무 수정
+
