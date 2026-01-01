@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS strategy_builder (
     name VARCHAR(100) UNIQUE NOT NULL,
     description TEXT,
     config JSON NOT NULL,
+    config_json JSON,  -- 구조화된 전략 설정 (지표, 조건, ICT 등)
     python_code TEXT,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -165,6 +166,36 @@ CREATE INDEX IF NOT EXISTS ix_stock_universe_strategy ON stock_universe(strategy
 CREATE INDEX IF NOT EXISTS ix_ohlc_symbol_interval ON ohlc_data(symbol, interval);
 CREATE INDEX IF NOT EXISTS ix_ohlc_timestamp ON ohlc_data(timestamp);
 CREATE INDEX IF NOT EXISTS ix_ohlc_symbol_interval_timestamp ON ohlc_data(symbol, interval, timestamp);
+
+-- 백테스트-실전 비교 결과 테이블
+CREATE TABLE IF NOT EXISTS backtest_live_comparisons (
+    id SERIAL PRIMARY KEY,
+    backtest_id INTEGER NOT NULL,
+    strategy_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    backtest_start TIMESTAMP NOT NULL,
+    backtest_end TIMESTAMP NOT NULL,
+    live_start TIMESTAMP NOT NULL,
+    live_end TIMESTAMP NOT NULL,
+    backtest_return FLOAT NOT NULL,
+    backtest_trades INTEGER NOT NULL,
+    backtest_win_rate FLOAT,
+    live_return FLOAT NOT NULL,
+    live_trades INTEGER NOT NULL,
+    live_win_rate FLOAT,
+    return_difference FLOAT NOT NULL,
+    trade_difference INTEGER NOT NULL,
+    slippage_contribution FLOAT,
+    commission_contribution FLOAT,
+    delay_contribution FLOAT,
+    liquidity_contribution FLOAT,
+    market_change_contribution FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_backtest_live_comparisons_backtest_id ON backtest_live_comparisons(backtest_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_live_comparisons_strategy_id ON backtest_live_comparisons(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_live_comparisons_user_id ON backtest_live_comparisons(user_id);
 
 -- Success message
 SELECT 'Tables created successfully!' AS status;

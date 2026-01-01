@@ -76,6 +76,11 @@ class BacktestRequest(BaseModel):
     start_date: datetime
     end_date: datetime
     initial_capital: float = 10_000_000
+    commission: Optional[float] = 0.0015  # 수수료율 (기본: 0.15%)
+    slippage: Optional[float] = 0.001  # 기본 슬리피지 (기본: 0.1%)
+    execution_delay: Optional[float] = 1.5  # 체결 지연 시간 (초, 기본: 1.5초)
+    use_dynamic_slippage: Optional[bool] = True  # 동적 슬리피지 사용 (기본: True)
+    use_tiered_commission: Optional[bool] = True  # 거래대금별 차등 수수료 (기본: True)
 
 
 class BacktestResponse(BaseModel):

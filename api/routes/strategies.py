@@ -1,15 +1,31 @@
 """
 전략 관리 API
 """
-from fastapi import APIRouter, HTTPException
-from typing import List
+from fastapi import APIRouter, HTTPException, Depends
+from typing import List, Optional
+from datetime import datetime
+from pydantic import BaseModel
 
 from core.strategy.registry import StrategyRegistry
 from api.schemas import StrategyListResponse, StrategyDetailResponse, MessageResponse
+from api.dependencies import get_db
+from sqlalchemy.orm import Session
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 router = APIRouter()
+
+
+# 전략 실행 상태 스키마
+class StrategyStatusResponse(BaseModel):
+    """전략 실행 상태 응답"""
+    strategy_id: int
+    is_running: bool
+    last_execution_time: Optional[datetime]
+    next_execution_time: Optional[datetime]
+    error_count: int
+    last_error: Optional[str]
+    status: str  # "running", "stopped", "error"
 
 
 @router.get("/list", response_model=List[StrategyListResponse])
@@ -124,4 +140,51 @@ async def reload_strategies():
     
     except Exception as e:
         logger.error(f"Failed to reload strategies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{strategy_id}/status", response_model=StrategyStatusResponse)
+async def get_strategy_status(
+    strategy_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    전략 실행 상태 조회 (Phase 3.2)
+    
+    Args:
+        strategy_id: 전략 ID
+    
+    Returns:
+        전략 실행 상태
+    """
+    try:
+        # TODO: ExecutionEngine 인스턴스를 전략 ID로 찾는 로직 필요
+        # 현재는 간단한 구현으로 DB에서 전략 정보만 조회
+        
+        from data.models import StrategyBuilderModel
+        strategy = db.query(StrategyBuilderModel).filter(
+            StrategyBuilderModel.id == strategy_id
+        ).first()
+        
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+        
+        # 간단한 구현: 전략이 활성화되어 있으면 실행 중으로 간주
+        # 실제로는 ExecutionEngine 인스턴스에서 상태를 가져와야 함
+        is_running = strategy.is_active
+        
+        return StrategyStatusResponse(
+            strategy_id=strategy_id,
+            is_running=is_running,
+            last_execution_time=None,  # TODO: ExecutionEngine에서 가져오기
+            next_execution_time=None,  # TODO: 스케줄러에서 가져오기
+            error_count=0,  # TODO: ExecutionEngine에서 가져오기
+            last_error=None,  # TODO: ExecutionEngine에서 가져오기
+            status="running" if is_running else "stopped"
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get strategy status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

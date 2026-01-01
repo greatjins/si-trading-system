@@ -31,22 +31,31 @@ class BacktestEngine:
         strategy: BaseStrategy,
         initial_capital: float,
         commission: float = 0.0015,
-        slippage: float = 0.0005,
-        rebalance_days: int = 5
+        slippage: float = 0.001,
+        rebalance_days: int = 5,
+        execution_delay: float = 1.5,
+        use_dynamic_slippage: bool = True,
+        use_tiered_commission: bool = True
     ):
         """
         Args:
             strategy: 백테스트할 전략
             initial_capital: 초기 자본
-            commission: 수수료율 (기본: 0.15%)
-            slippage: 슬리피지 (기본: 0.05%)
+            commission: 수수료율 (기본: 0.15%, 고정 수수료 모드)
+            slippage: 기본 슬리피지 (기본: 0.1%, 동적 슬리피지의 기준값)
             rebalance_days: 리밸런싱 주기 (일, 기본: 5일 = 주간)
+            execution_delay: 체결 지연 시간 (초, 기본: 1.5초)
+            use_dynamic_slippage: 동적 슬리피지 사용 여부 (기본: True)
+            use_tiered_commission: 거래대금별 차등 수수료 사용 여부 (기본: True)
         """
         self.strategy = strategy
         self.initial_capital = initial_capital
         self.commission = commission
-        self.slippage = slippage
+        self.base_slippage = slippage  # 기본 슬리피지 (동적 계산의 기준)
         self.rebalance_days = rebalance_days
+        self.execution_delay = execution_delay
+        self.use_dynamic_slippage = use_dynamic_slippage
+        self.use_tiered_commission = use_tiered_commission
         
         # 포지션 관리자
         self.position_manager = PositionManager(commission=commission)
@@ -63,8 +72,12 @@ class BacktestEngine:
         # 리밸런싱 추적
         self.last_rebalance_date: datetime = None
         
+        # 체결 지연 큐 (Phase 1.2용)
+        self.pending_orders: List[Dict[str, Any]] = []
+        
         logger.info(f"BacktestEngine initialized: {strategy.name}")
-        logger.info(f"Initial capital: {initial_capital:,.0f}, Commission: {commission:.4%}, Slippage: {slippage:.4%}, Rebalance: {rebalance_days}일")
+        logger.info(f"Initial capital: {initial_capital:,.0f}, Commission: {commission:.4%}, Base slippage: {slippage:.4%}")
+        logger.info(f"Execution delay: {execution_delay}s, Dynamic slippage: {use_dynamic_slippage}, Tiered commission: {use_tiered_commission}")
     
     async def run(
         self,
@@ -154,9 +167,17 @@ class BacktestEngine:
                 logger.error(f"Strategy error at {current_bar.timestamp}: {e}", exc_info=True)
                 signals = []
             
-            # 주문 신호 처리
+            # 주문 신호 처리 (체결 지연 시뮬레이션)
             for signal in signals:
-                self._process_signal(signal, current_bar)
+                if self.execution_delay > 0:
+                    # 체결 지연: 주문을 큐에 저장
+                    self._queue_order(signal, current_bar, historical_bars)
+                else:
+                    # 즉시 체결
+                    self._process_signal(signal, current_bar, historical_bars)
+            
+            # 체결 지연 큐에서 만료된 주문 처리
+            self._process_pending_orders(current_bar, historical_bars)
             
             # 자산 기록
             self._update_equity(current_bar.timestamp)
@@ -411,7 +432,8 @@ class BacktestEngine:
                         volume=0
                     )
                     
-                    self._process_signal(signal, fake_bar)
+                    # 포트폴리오 백테스트는 historical_bars 없이 처리
+                    self._process_signal(signal, fake_bar, None)
         
         # 2. 목표 비중에 맞춰 매수/매도
         for symbol, target_weight in target_weights.items():
@@ -486,27 +508,217 @@ class BacktestEngine:
             margin_available=self.cash
         )
     
-    def _process_signal(self, signal: OrderSignal, current_bar: OHLC) -> None:
+    def _calculate_dynamic_slippage(
+        self,
+        current_bar: OHLC,
+        historical_bars: pd.DataFrame = None,
+        order_quantity: int = 0
+    ) -> float:
         """
-        주문 신호 처리 (리스크 관리 강화)
+        동적 슬리피지 계산 (변동성/거래량 기반)
+        
+        Args:
+            current_bar: 현재 OHLC 바
+            historical_bars: 과거 데이터 (ATR 계산용)
+            order_quantity: 주문 수량 (거래량 비교용)
+        
+        Returns:
+            계산된 슬리피지 비율
+        """
+        if not self.use_dynamic_slippage:
+            return self.base_slippage
+        
+        slippage = self.base_slippage
+        
+        try:
+            # 1. 변동성 기반 조정 (ATR)
+            if historical_bars is not None and len(historical_bars) >= 14:
+                # ATR 계산
+                atr = self._calculate_atr(historical_bars)
+                if atr > 0 and current_bar.close > 0:
+                    # ATR 대비 가격 비율 (변동성이 클수록 높은 슬리피지)
+                    volatility_ratio = atr / current_bar.close
+                    # 변동성 기반 슬리피지 증가 (최대 2배)
+                    volatility_multiplier = min(1.0 + volatility_ratio * 10, 2.0)
+                    slippage *= volatility_multiplier
+            
+            # 2. 거래량 기반 조정
+            if current_bar.volume > 0 and order_quantity > 0:
+                # 주문 수량이 거래량 대비 비율
+                volume_ratio = order_quantity / current_bar.volume
+                # 거래량이 적을수록 높은 슬리피지 (최대 3배)
+                if volume_ratio > 0.01:  # 주문이 거래량의 1% 초과
+                    volume_multiplier = min(1.0 + volume_ratio * 20, 3.0)
+                    slippage *= volume_multiplier
+            
+            # 3. 시장 상황별 조정 (상승장/하락장/횡보)
+            if historical_bars is not None and len(historical_bars) >= 20:
+                # 최근 20일 평균 수익률로 시장 상황 판단
+                recent_returns = historical_bars['close'].pct_change().tail(20)
+                avg_return = recent_returns.mean()
+                
+                if avg_return > 0.001:  # 상승장
+                    slippage *= 0.9  # 상승장에서는 슬리피지 약간 감소
+                elif avg_return < -0.001:  # 하락장
+                    slippage *= 1.2  # 하락장에서는 슬리피지 증가
+            
+            # 최소/최대 슬리피지 제한
+            slippage = max(self.base_slippage * 0.5, min(slippage, self.base_slippage * 5.0))
+        
+        except Exception as e:
+            logger.warning(f"Error calculating dynamic slippage: {e}, using base slippage")
+            slippage = self.base_slippage
+        
+        return slippage
+    
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """ATR 계산 (캐시 사용)"""
+        if len(df) < period:
+            return 0.0
+        
+        # 캐시 키 생성
+        cache_key = f"{df.index[-1]}_{period}"
+        if cache_key in self._atr_cache:
+            return self._atr_cache[cache_key]
+        
+        # ATR 계산
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean().iloc[-1]
+        
+        atr_value = float(atr) if pd.notna(atr) else 0.0
+        self._atr_cache[cache_key] = atr_value
+        
+        return atr_value
+    
+    def _calculate_commission(
+        self,
+        order_value: float,
+        is_round_trip: bool = False
+    ) -> float:
+        """
+        수수료 계산 (거래대금별 차등)
+        
+        Args:
+            order_value: 주문 금액
+            is_round_trip: 왕복 거래 여부 (매수+매도)
+        
+        Returns:
+            수수료 금액
+        """
+        if not self.use_tiered_commission:
+            # 고정 수수료
+            commission = order_value * self.commission
+            if is_round_trip:
+                commission *= 2  # 매수+매도
+            return commission
+        
+        # 거래대금별 차등 수수료
+        # 일반적으로 거래대금이 클수록 낮은 수수료율
+        if order_value < 1_000_000:  # 100만원 미만
+            rate = self.commission * 1.2  # 0.18%
+        elif order_value < 10_000_000:  # 1000만원 미만
+            rate = self.commission  # 0.15%
+        elif order_value < 100_000_000:  # 1억원 미만
+            rate = self.commission * 0.8  # 0.12%
+        else:  # 1억원 이상
+            rate = self.commission * 0.6  # 0.09%
+        
+        commission = order_value * rate
+        if is_round_trip:
+            commission *= 2  # 매수+매도
+        
+        return commission
+    
+    def _check_liquidity(
+        self,
+        signal: OrderSignal,
+        current_bar: OHLC,
+        historical_bars: pd.DataFrame = None
+    ) -> bool:
+        """
+        유동성 체크 (거래량 부족 시 주문 실패)
         
         Args:
             signal: 주문 신호
             current_bar: 현재 OHLC 바
+            historical_bars: 과거 데이터 (평균 거래량 계산용)
+        
+        Returns:
+            유동성이 충분하면 True, 부족하면 False
         """
+        if current_bar.volume <= 0:
+            logger.warning(f"Liquidity check failed: {signal.symbol} has zero volume")
+            return False
+        
+        # 주문 수량이 거래량 대비 비율
+        volume_ratio = signal.quantity / current_bar.volume
+        
+        # 임계값: 주문 수량이 일일 거래량의 10% 초과 시 실패
+        LIQUIDITY_THRESHOLD = 0.10
+        
+        if volume_ratio > LIQUIDITY_THRESHOLD:
+            logger.warning(
+                f"Liquidity check failed: {signal.symbol} "
+                f"order quantity ({signal.quantity}) exceeds {LIQUIDITY_THRESHOLD:.1%} "
+                f"of daily volume ({current_bar.volume})"
+            )
+            return False
+        
+        # 추가 체크: 평균 거래량 대비 현재 거래량이 너무 낮으면 경고
+        if historical_bars is not None and len(historical_bars) >= 20:
+            avg_volume = historical_bars['volume'].tail(20).mean()
+            if current_bar.volume < avg_volume * 0.3:  # 평균의 30% 미만
+                logger.warning(
+                    f"Low liquidity warning: {signal.symbol} "
+                    f"current volume ({current_bar.volume:,.0f}) is below 30% "
+                    f"of 20-day average ({avg_volume:,.0f})"
+                )
+                # 경고만 하고 주문은 진행 (선택적)
+        
+        return True
+    
+    def _process_signal(self, signal: OrderSignal, current_bar: OHLC, historical_bars: pd.DataFrame = None) -> None:
+        """
+        주문 신호 처리 (리스크 관리 강화, 동적 슬리피지/수수료 적용, 유동성 체크)
+        
+        Args:
+            signal: 주문 신호
+            current_bar: 현재 OHLC 바
+            historical_bars: 과거 데이터 (동적 슬리피지 계산용)
+        """
+        # 유동성 체크
+        if not self._check_liquidity(signal, current_bar, historical_bars):
+            logger.warning(f"Order rejected due to insufficient liquidity: {signal.symbol} {signal.side.value} {signal.quantity}")
+            return
+        
+        # 동적 슬리피지 계산
+        slippage = self._calculate_dynamic_slippage(
+            current_bar,
+            historical_bars,
+            signal.quantity
+        )
+        
         # 실행 가격 계산 (슬리피지 적용)
         if signal.order_type == OrderType.MARKET:
             if signal.side == OrderSide.BUY:
-                execution_price = current_bar.close * (1 + self.slippage)
+                execution_price = current_bar.close * (1 + slippage)
             else:
-                execution_price = current_bar.close * (1 - self.slippage)
+                execution_price = current_bar.close * (1 - slippage)
         else:
             execution_price = signal.price or current_bar.close
         
         # 매수 처리
         if signal.side == OrderSide.BUY:
             order_value = signal.quantity * execution_price
-            commission_cost = order_value * self.commission
+            commission_cost = self._calculate_commission(order_value, is_round_trip=False)
             total_cost = order_value + commission_cost
             
             # 🔒 강화된 리스크 관리: 잔액 확인 및 자동 수량 조정
@@ -516,7 +728,9 @@ class BacktestEngine:
             if total_cost > available_cash:
                 # 사용 가능한 현금의 80%로 수량 조정 (기존 95%에서 축소)
                 max_investment = available_cash * 0.8
-                adjusted_quantity = int(max_investment / (execution_price * (1 + self.commission)))
+                # 수수료를 고려한 최대 수량 계산 (반복 계산으로 정확도 향상)
+                estimated_commission_rate = self.commission if not self.use_tiered_commission else self.commission * 0.8
+                adjusted_quantity = int(max_investment / (execution_price * (1 + estimated_commission_rate)))
                 
                 if adjusted_quantity <= 0:
                     logger.debug(f"투자 가능 수량 없음: {signal.symbol} (현금: {available_cash:,.0f})")
@@ -526,7 +740,7 @@ class BacktestEngine:
                 original_quantity = signal.quantity
                 signal.quantity = adjusted_quantity
                 order_value = signal.quantity * execution_price
-                commission_cost = order_value * self.commission
+                commission_cost = self._calculate_commission(order_value, is_round_trip=False)
                 total_cost = order_value + commission_cost
                 
                 logger.debug(f"수량 자동 조정: {signal.symbol} {original_quantity}주 → {adjusted_quantity}주")
@@ -534,12 +748,13 @@ class BacktestEngine:
             # 🚨 추가 안전장치: 단일 거래 최대 투자 한도
             max_single_investment = self.initial_capital * 0.1  # 초기 자본의 10%
             if total_cost > max_single_investment:
-                safe_quantity = int(max_single_investment / (execution_price * (1 + self.commission)))
+                estimated_commission_rate = self.commission if not self.use_tiered_commission else self.commission * 0.8
+                safe_quantity = int(max_single_investment / (execution_price * (1 + estimated_commission_rate)))
                 if safe_quantity < signal.quantity:
                     logger.warning(f"단일 거래 한도 초과로 수량 조정: {signal.quantity}주 → {safe_quantity}주")
                     signal.quantity = safe_quantity
                     order_value = signal.quantity * execution_price
-                    commission_cost = order_value * self.commission
+                    commission_cost = self._calculate_commission(order_value, is_round_trip=False)
                     total_cost = order_value + commission_cost
             
             # 포지션 진입
@@ -584,7 +799,7 @@ class BacktestEngine:
             if trade:
                 # 현금 증가
                 order_value = sell_quantity * execution_price
-                commission_cost = order_value * self.commission
+                commission_cost = self._calculate_commission(order_value, is_round_trip=False)
                 net_proceeds = order_value - commission_cost
                 self.cash += net_proceeds
                 self.all_trades.append(trade)

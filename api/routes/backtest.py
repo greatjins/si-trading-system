@@ -102,7 +102,9 @@ async def run_backtest(request: BacktestRequest):
             # JSON 설정 기반으로 전략 생성 (exec() 대신)
             try:
                 db_config = {
-                    "config": builder_strategy.config,
+                    "id": builder_strategy.id,  # DynamicStrategy용
+                    "config": builder_strategy.config,  # 기존 호환성
+                    "config_json": builder_strategy.config_json,  # 구조화된 설정 (우선 사용)
                     "python_code": builder_strategy.python_code,  # 참고용 (사용 안 함)
                     "name": builder_strategy.name
                 }
@@ -146,7 +148,11 @@ async def run_backtest(request: BacktestRequest):
         engine = BacktestEngine(
             strategy=strategy,
             initial_capital=request.initial_capital,
-            commission=0.00015
+            commission=request.commission or 0.0015,
+            slippage=request.slippage or 0.001,
+            execution_delay=request.execution_delay or 1.5,
+            use_dynamic_slippage=request.use_dynamic_slippage if request.use_dynamic_slippage is not None else True,
+            use_tiered_commission=request.use_tiered_commission if request.use_tiered_commission is not None else True
         )
         
         # 비동기 실행
@@ -309,7 +315,9 @@ async def run_portfolio_backtest(request: BacktestRequest):
             # JSON 설정 기반으로 전략 생성 (exec() 대신)
             try:
                 db_config = {
-                    "config": builder_strategy.config,
+                    "id": builder_strategy.id,  # DynamicStrategy용
+                    "config": builder_strategy.config,  # 기존 호환성
+                    "config_json": builder_strategy.config_json,  # 구조화된 설정 (우선 사용)
                     "python_code": builder_strategy.python_code,  # 참고용 (사용 안 함)
                     "name": builder_strategy.name
                 }
@@ -345,7 +353,11 @@ async def run_portfolio_backtest(request: BacktestRequest):
         engine = BacktestEngine(
             strategy=strategy,
             initial_capital=request.initial_capital,
-            commission=0.00015
+            commission=request.commission or 0.0015,
+            slippage=request.slippage or 0.001,
+            execution_delay=request.execution_delay or 1.5,
+            use_dynamic_slippage=request.use_dynamic_slippage if request.use_dynamic_slippage is not None else True,
+            use_tiered_commission=request.use_tiered_commission if request.use_tiered_commission is not None else True
         )
         
         # 포트폴리오 백테스트 실행 (symbol 없이)
