@@ -75,10 +75,11 @@ async def run_backtest(request: BacktestRequest):
         except (ValueError, KeyError, Exception) as e:
             logger.info(f"Strategy not in registry, trying builder: {e}")
         
-        # 전략이 레지스트리에 없으면 전략 빌더에서 로드
+        # 전략이 레지스트리에 없으면 전략 빌더에서 로드 (JSON 기반)
         if strategy is None:
             from data.models import StrategyBuilderModel
             from data.repository import get_db_session
+            from core.strategy.factory import StrategyFactory
             
             # DB 세션 생성
             db = get_db_session()
@@ -98,67 +99,43 @@ async def run_backtest(request: BacktestRequest):
             finally:
                 db.close()
             
-            # Python 코드 실행하여 전략 클래스 생성
-            python_code = builder_strategy.python_code
-            
-            # 디버깅: 생성된 코드 저장
-            import os
-            debug_file = f"data/debug_strategy_{builder_strategy.id}.py"
-            with open(debug_file, 'w', encoding='utf-8') as f:
-                f.write(python_code)
-            logger.info(f"Generated code saved to: {debug_file}")
-            
-            # 전략 클래스 동적 로드
-            import sys
-            from types import ModuleType
-            import pandas as pd
-            
-            # 임시 모듈 생성
-            temp_module = ModuleType("temp_strategy")
-            temp_module.__dict__.update({
-                "BaseStrategy": __import__("core.strategy.base", fromlist=["BaseStrategy"]).BaseStrategy,
-                "strategy": __import__("core.strategy.registry", fromlist=["strategy"]).strategy,
-                "OHLC": __import__("utils.types", fromlist=["OHLC"]).OHLC,
-                "Position": __import__("utils.types", fromlist=["Position"]).Position,
-                "Account": __import__("utils.types", fromlist=["Account"]).Account,
-                "OrderSignal": __import__("utils.types", fromlist=["OrderSignal"]).OrderSignal,
-                "OrderSide": __import__("utils.types", fromlist=["OrderSide"]).OrderSide,
-                "OrderType": __import__("utils.types", fromlist=["OrderType"]).OrderType,
-                "Order": __import__("utils.types", fromlist=["Order"]).Order,
-                "List": List,
-                "pd": pd,
-                "datetime": datetime,
-            })
-            
-            # 코드 실행
+            # JSON 설정 기반으로 전략 생성 (exec() 대신)
             try:
-                exec(python_code, temp_module.__dict__)
-            except SyntaxError as e:
-                logger.error(f"Syntax error in generated code: {e}")
-                logger.error(f"Full code:\n{python_code}")
-                raise
-            
-            # 전략 클래스 찾기
-            strategy_class = None
-            for name, obj in temp_module.__dict__.items():
-                if isinstance(obj, type) and hasattr(obj, "on_bar") and name != "BaseStrategy":
-                    strategy_class = obj
-                    break
-            
-            if not strategy_class:
+                db_config = {
+                    "config": builder_strategy.config,
+                    "python_code": builder_strategy.python_code,  # 참고용 (사용 안 함)
+                    "name": builder_strategy.name
+                }
+                
+                # StrategyFactory를 사용하여 전략 생성
+                strategy = StrategyFactory.create_from_db_config(db_config)
+                
+                # 요청 파라미터로 오버라이드 (있는 경우)
+                if request.parameters:
+                    for key, value in request.parameters.items():
+                        strategy.set_param(key, value)
+                
+                logger.info(f"✓ Loaded strategy from JSON config: {request.strategy_name}")
+            except Exception as e:
+                logger.error(f"Failed to create strategy from JSON config: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,
-                    detail="Failed to load strategy class from generated code"
+                    detail=f"Failed to load strategy from config: {str(e)}"
                 )
-            
-            strategy = strategy_class(params=request.parameters or {})
-            logger.info(f"Loaded strategy from builder: {request.strategy_name}")
         
-        # select_universe 메서드가 있고 symbol이 없으면 포트폴리오 전략
-        if hasattr(strategy, 'select_universe') and not request.symbol:
-            logger.info(f"Strategy '{request.strategy_name}' has select_universe - running as portfolio strategy")
+        # 포트폴리오 전략 여부 확인 (is_portfolio_strategy() 사용)
+        is_portfolio = strategy.is_portfolio_strategy()
+        
+        if is_portfolio and not request.symbol:
+            logger.info(f"Strategy '{request.strategy_name}' is portfolio strategy - running as portfolio backtest")
             # symbol 없이 포트폴리오 백테스트 실행
             ohlc_list = None
+        elif not request.symbol and not is_portfolio:
+            # 단일 종목 전략인데 symbol이 없으면 에러
+            raise HTTPException(
+                status_code=400,
+                detail=f"Strategy '{request.strategy_name}' requires a symbol. Please provide 'symbol' in the request."
+            )
         
         if request.symbol:
             logger.info(f"Running single-symbol backtest: {request.strategy_name} on {request.symbol}")
@@ -307,10 +284,11 @@ async def run_portfolio_backtest(request: BacktestRequest):
         except (ValueError, KeyError, Exception) as e:
             logger.info(f"Strategy not in registry, trying builder: {e}")
         
-        # 전략이 레지스트리에 없으면 전략 빌더에서 로드
+        # 전략이 레지스트리에 없으면 전략 빌더에서 로드 (JSON 기반)
         if strategy is None:
             from data.models import StrategyBuilderModel
             from data.repository import get_db_session
+            from core.strategy.factory import StrategyFactory
             
             db = get_db_session()
             
@@ -328,52 +306,36 @@ async def run_portfolio_backtest(request: BacktestRequest):
             finally:
                 db.close()
             
-            # Python 코드 실행하여 전략 클래스 생성
-            python_code = builder_strategy.python_code
-            
-            import sys
-            from types import ModuleType
-            import pandas as pd
-            
-            temp_module = ModuleType("temp_strategy")
-            temp_module.__dict__.update({
-                "BaseStrategy": __import__("core.strategy.base", fromlist=["BaseStrategy"]).BaseStrategy,
-                "strategy": __import__("core.strategy.registry", fromlist=["strategy"]).strategy,
-                "OHLC": __import__("utils.types", fromlist=["OHLC"]).OHLC,
-                "Position": __import__("utils.types", fromlist=["Position"]).Position,
-                "Account": __import__("utils.types", fromlist=["Account"]).Account,
-                "OrderSignal": __import__("utils.types", fromlist=["OrderSignal"]).OrderSignal,
-                "OrderSide": __import__("utils.types", fromlist=["OrderSide"]).OrderSide,
-                "OrderType": __import__("utils.types", fromlist=["OrderType"]).OrderType,
-                "Order": __import__("utils.types", fromlist=["Order"]).Order,
-                "List": List,
-                "pd": pd,
-                "datetime": datetime,
-            })
-            
+            # JSON 설정 기반으로 전략 생성 (exec() 대신)
             try:
-                exec(python_code, temp_module.__dict__)
-            except SyntaxError as e:
-                logger.error(f"Syntax error in generated code: {e}")
-                raise HTTPException(status_code=500, detail=f"Syntax error in strategy code: {e}")
-            
-            strategy_class = None
-            for name, obj in temp_module.__dict__.items():
-                if isinstance(obj, type) and hasattr(obj, "on_bar") and name != "BaseStrategy":
-                    strategy_class = obj
-                    break
-            
-            if not strategy_class:
+                db_config = {
+                    "config": builder_strategy.config,
+                    "python_code": builder_strategy.python_code,  # 참고용 (사용 안 함)
+                    "name": builder_strategy.name
+                }
+                
+                # StrategyFactory를 사용하여 전략 생성
+                strategy = StrategyFactory.create_from_db_config(db_config)
+                
+                # 요청 파라미터로 오버라이드 (있는 경우)
+                if request.parameters:
+                    for key, value in request.parameters.items():
+                        strategy.set_param(key, value)
+                
+                logger.info(f"✓ Loaded strategy from JSON config: {request.strategy_name}")
+            except Exception as e:
+                logger.error(f"Failed to create strategy from JSON config: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=500,
-                    detail="Failed to load strategy class from generated code"
+                    detail=f"Failed to load strategy from config: {str(e)}"
                 )
-            
-            strategy = strategy_class(params=request.parameters or {})
-            logger.info(f"Loaded strategy from builder: {request.strategy_name}")
         
-        # 포트폴리오 전략인지 확인
-        if not hasattr(strategy, 'select_universe'):
+        # 포트폴리오 전략인지 확인 (is_portfolio_strategy() 사용)
+        is_portfolio = strategy.is_portfolio_strategy()
+        logger.info(f"Strategy '{request.strategy_name}' is_portfolio_strategy() = {is_portfolio}")
+        logger.info(f"  Strategy params: {strategy.params}")
+        
+        if not is_portfolio:
             raise HTTPException(
                 status_code=400,
                 detail=f"Strategy '{request.strategy_name}' is not a portfolio strategy. Use /api/backtest/run instead."

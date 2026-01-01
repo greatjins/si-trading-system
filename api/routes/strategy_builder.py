@@ -139,6 +139,7 @@ class StrategyBuilderRequest(BaseModel):
     strategy_id: int = None  # 수정 시 전략 ID
     name: str
     description: str
+    is_portfolio: Optional[bool] = None  # 단일 종목(false) vs 포트폴리오(true)
     stockSelection: StockSelection
     buyConditions: List[Condition]
     sellConditions: List[Condition]
@@ -192,24 +193,28 @@ async def save_strategy(
             
             strategy.name = request.name
             strategy.description = request.description
-            strategy.config = request.dict()
+            config_dict = request.dict()
+            strategy.config = config_dict
             strategy.python_code = python_code
             strategy.updated_at = datetime.now()
             
             logger.info(f"Strategy updated: ID={strategy.id}, Name={request.name}, User={current_user['username']}")
+            logger.info(f"  Config is_portfolio: {config_dict.get('is_portfolio', 'NOT SET')}")
         else:
             # 새 전략 생성
+            config_dict = request.dict()
             strategy = StrategyBuilderModel(
                 user_id=current_user["user_id"],
                 name=request.name,
                 description=request.description,
-                config=request.dict(),
+                config=config_dict,
                 python_code=python_code,
                 is_active=True
             )
             
             db.add(strategy)
             logger.info(f"Strategy created: Name={request.name}, User={current_user['username']}")
+            logger.info(f"  Config is_portfolio: {config_dict.get('is_portfolio', 'NOT SET')}")
         
         db.commit()
         db.refresh(strategy)
@@ -508,11 +513,29 @@ async def list_strategies(
         for s in strategies:
             is_portfolio = False
             try:
-                # config에서 stockSelection 추출
-                stock_selection_data = s.config.get('stockSelection', {})
-                if stock_selection_data:
-                    stock_selection = StockSelection(**stock_selection_data)
-                    is_portfolio = _has_stock_selection_criteria(stock_selection)
+                # 우선순위 1: config에 명시적으로 is_portfolio 필드가 있으면 사용
+                if 'is_portfolio' in s.config:
+                    is_portfolio = bool(s.config.get('is_portfolio', False))
+                    logger.info(f"Strategy {s.name}: is_portfolio from config = {is_portfolio} (config keys: {list(s.config.keys())})")
+                else:
+                    # 우선순위 2: 실제 전략 인스턴스를 생성하여 확인 (가장 정확)
+                    from core.strategy.factory import StrategyFactory
+                    try:
+                        db_config = {
+                            "config": s.config,
+                            "name": s.name
+                        }
+                        strategy = StrategyFactory.create_from_db_config(db_config)
+                        is_portfolio = strategy.is_portfolio_strategy()
+                        logger.debug(f"Strategy {s.name}: is_portfolio from instance = {is_portfolio}")
+                    except Exception as strategy_error:
+                        # 우선순위 3: 전략 생성 실패 시 fallback: config에서 stockSelection 확인
+                        logger.debug(f"Could not create strategy instance for {s.name}, using config check: {strategy_error}")
+                        stock_selection_data = s.config.get('stockSelection', {})
+                        if stock_selection_data:
+                            stock_selection = StockSelection(**stock_selection_data)
+                            is_portfolio = _has_stock_selection_criteria(stock_selection)
+                            logger.debug(f"Strategy {s.name}: is_portfolio from stockSelection = {is_portfolio}")
             except Exception as e:
                 logger.warning(f"Failed to check portfolio status for strategy {s.id}: {e}")
             
@@ -523,6 +546,8 @@ async def list_strategies(
                 "created_at": s.created_at,
                 "is_portfolio": is_portfolio,
             })
+            
+            logger.info(f"Strategy {s.name}: is_portfolio = {is_portfolio}")
         
         return result
     

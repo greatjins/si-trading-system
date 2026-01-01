@@ -8,6 +8,10 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$KeyPath,
     
+    [string]$RemoteUser = "ubuntu",
+    
+    [string]$RemotePath = "~/ls-hts",
+    
     [string[]]$Files,
     
     [switch]$All,
@@ -25,7 +29,7 @@ Write-Host ""
 # SSH 연결 테스트
 Write-Host "🔗 SSH 연결 테스트..." -ForegroundColor Yellow
 try {
-    $result = ssh -i $KeyPath -o ConnectTimeout=10 ubuntu@$AwsIp "echo 'connected'" 2>&1
+    $result = ssh -i $KeyPath -o ConnectTimeout=10 $RemoteUser@$AwsIp "echo 'connected'" 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "SSH 연결 실패"
     }
@@ -55,7 +59,7 @@ if ($All) {
             --exclude='frontend/node_modules' `
             --exclude='*.pyc' `
             --exclude='.env' `
-            ./ ubuntu@${AwsIp}:~/ls-hts/
+            ./ $RemoteUser@${AwsIp}:${RemotePath}/
     } else {
         Write-Host "⚠️  rsync가 없어 주요 폴더만 전송합니다." -ForegroundColor Yellow
         
@@ -64,7 +68,7 @@ if ($All) {
         foreach ($folder in $folders) {
             if (Test-Path $folder) {
                 Write-Host "  📤 $folder/" -ForegroundColor Gray
-                scp -i $KeyPath -r $folder ubuntu@${AwsIp}:~/ls-hts/
+                scp -i $KeyPath -r $folder $RemoteUser@${AwsIp}:${RemotePath}/
             }
         }
         
@@ -73,7 +77,7 @@ if ($All) {
         foreach ($file in $rootFiles) {
             if (Test-Path $file) {
                 Write-Host "  📤 $file" -ForegroundColor Gray
-                scp -i $KeyPath $file ubuntu@${AwsIp}:~/ls-hts/
+                scp -i $KeyPath $file $RemoteUser@${AwsIp}:${RemotePath}/
             }
         }
     }
@@ -87,9 +91,9 @@ if ($All) {
     
     foreach ($file in $Files) {
         if (Test-Path $file) {
-            $remotePath = "~/ls-hts/" + (Split-Path $file -Parent).Replace("\", "/")
-            Write-Host "  📄 $file -> $remotePath/" -ForegroundColor Gray
-            scp -i $KeyPath $file ubuntu@${AwsIp}:$remotePath/
+            $targetPath = "$RemotePath/" + (Split-Path $file -Parent).Replace("\", "/")
+            Write-Host "  📄 $file -> $targetPath/" -ForegroundColor Gray
+            scp -i $KeyPath $file $RemoteUser@${AwsIp}:$targetPath/
         } else {
             Write-Host "  ⚠️  파일 없음: $file" -ForegroundColor Yellow
         }
@@ -112,9 +116,9 @@ if ($All) {
     
     foreach ($file in $defaultFiles) {
         if (Test-Path $file) {
-            $remotePath = "~/ls-hts/" + (Split-Path $file -Parent).Replace("\", "/")
+            $targetPath = "$RemotePath/" + (Split-Path $file -Parent).Replace("\", "/")
             Write-Host "  📄 $file" -ForegroundColor Gray
-            scp -i $KeyPath $file ubuntu@${AwsIp}:$remotePath/
+            scp -i $KeyPath $file $RemoteUser@${AwsIp}:$targetPath/
         }
     }
     
@@ -125,25 +129,41 @@ if ($All) {
 if (-not $NoRestart) {
     Write-Host ""
     Write-Host "🔄 앱 재시작 중..." -ForegroundColor Yellow
-    ssh -i $KeyPath ubuntu@$AwsIp "cd ~/ls-hts && docker-compose -f deploy/docker-compose.prod.yml restart app"
+    ssh -i $KeyPath $RemoteUser@$AwsIp "cd $RemotePath && docker-compose -f deploy/docker-compose.prod.yml restart app"
     Write-Host "✅ 앱 재시작 완료" -ForegroundColor Green
 }
 
 # 헬스 체크
 Write-Host ""
 Write-Host "🏥 헬스 체크 중..." -ForegroundColor Yellow
-Start-Sleep -Seconds 5
 
-try {
-    $response = Invoke-WebRequest -Uri "http://$AwsIp/health" -TimeoutSec 10 -UseBasicParsing
-    if ($response.StatusCode -eq 200) {
-        Write-Host "✅ 서비스 정상 작동 중" -ForegroundColor Green
+$maxRetries = 10
+$retryCount = 0
+$isHealthy = $false
+
+while ($retryCount -lt $maxRetries) {
+    Start-Sleep -Seconds 2
+    try {
+        $response = Invoke-WebRequest -Uri "http://$AwsIp/health" -TimeoutSec 5 -UseBasicParsing
+        if ($response.StatusCode -eq 200) {
+            $isHealthy = $true
+            break
+        }
+    } catch {
+        Write-Host -NoNewline "." -ForegroundColor Gray
     }
-} catch {
-    Write-Host "⚠️  헬스 체크 실패 - 잠시 후 다시 확인하세요" -ForegroundColor Yellow
+    $retryCount++
 }
 
 Write-Host ""
-Write-Host "🎉 배포 완료!" -ForegroundColor Cyan
-Write-Host "🌐 접속: http://$AwsIp" -ForegroundColor Cyan
-Write-Host ""
+
+if ($isHealthy) {
+    Write-Host "✅ 서비스 정상 작동 중" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "🎉 배포 완료!" -ForegroundColor Cyan
+    Write-Host "🌐 접속: http://$AwsIp" -ForegroundColor Cyan
+    Write-Host ""
+} else {
+    Write-Host "⚠️  헬스 체크 실패 (Timeout) - 잠시 후 다시 확인하거나 로그를 확인하세요" -ForegroundColor Red
+    exit 1
+}

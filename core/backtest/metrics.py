@@ -1,13 +1,163 @@
 """
 백테스트 성과 메트릭 계산
 """
-from typing import List, Dict
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+from datetime import datetime
 import numpy as np
 
 from utils.types import Trade, OrderSide
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+# --- 디자인 문서 기반 데이터 모델 ---
+
+@dataclass
+class CompletedTrade:
+    """완결된 거래 (매수 → 매도)"""
+    symbol: str
+    entry_date: datetime
+    entry_price: float
+    entry_quantity: float
+    exit_date: datetime
+    exit_price: float
+    exit_quantity: float
+    pnl: float  # 손익 (원)
+    return_pct: float  # 수익률 (%)
+    holding_period: int  # 보유 기간 (일)
+    commission: float  # 수수료
+
+@dataclass
+class SymbolPerformance:
+    """종목별 성과"""
+    symbol: str
+    total_return: float  # 총 수익률 (%)
+    trade_count: int  # 거래 횟수
+    win_rate: float  # 승률 (%)
+    profit_factor: float  # 손익비
+    avg_holding_period: float  # 평균 보유 기간 (일)
+    total_pnl: float  # 총 손익 (원)
+
+
+# --- 디자인 문서 기반 분석기 ---
+
+class TradeAnalyzer:
+    """거래 분석 및 메트릭 계산"""
+    
+    @staticmethod
+    def group_trades_by_symbol(trades: List[Trade]) -> Dict[str, List[Trade]]:
+        """종목별로 거래 그룹화"""
+        grouped = {}
+        for trade in trades:
+            if trade.symbol not in grouped:
+                grouped[trade.symbol] = []
+            grouped[trade.symbol].append(trade)
+        return grouped
+    
+    @staticmethod
+    def match_entry_exit(trades: List[Trade]) -> List[CompletedTrade]:
+        """매수/매도 거래를 매칭하여 완결된 거래 생성"""
+        if not trades:
+            return []
+            
+        # 시간순 정렬
+        sorted_trades = sorted(trades, key=lambda x: x.timestamp)
+        completed_trades = []
+        
+        # FIFO 매칭을 위한 큐
+        buy_queue = []  # (quantity, price, timestamp, commission_per_unit)
+        
+        for trade in sorted_trades:
+            if trade.side == OrderSide.BUY:
+                buy_queue.append({
+                    'quantity': trade.quantity,
+                    'price': trade.price,
+                    'date': trade.timestamp,
+                    'commission': trade.commission / trade.quantity if trade.quantity > 0 else 0
+                })
+            
+            elif trade.side == OrderSide.SELL:
+                remaining_sell_qty = trade.quantity
+                
+                while remaining_sell_qty > 0 and buy_queue:
+                    buy_item = buy_queue[0]
+                    match_qty = min(remaining_sell_qty, buy_item['quantity'])
+                    
+                    # 매수/매도 수수료 계산 (비례 배분)
+                    entry_commission = buy_item['commission'] * match_qty
+                    exit_commission = (trade.commission / trade.quantity) * match_qty if trade.quantity > 0 else 0
+                    total_commission = entry_commission + exit_commission
+                    
+                    # 손익 계산
+                    buy_val = match_qty * buy_item['price']
+                    sell_val = match_qty * trade.price
+                    pnl = sell_val - buy_val - total_commission
+                    return_pct = (pnl / buy_val) if buy_val > 0 else 0.0
+                    
+                    # 보유 기간
+                    holding_days = (trade.timestamp - buy_item['date']).days
+                    
+                    completed_trades.append(CompletedTrade(
+                        symbol=trade.symbol,
+                        entry_date=buy_item['date'],
+                        entry_price=buy_item['price'],
+                        entry_quantity=match_qty,
+                        exit_date=trade.timestamp,
+                        exit_price=trade.price,
+                        exit_quantity=match_qty,
+                        pnl=pnl,
+                        return_pct=return_pct,
+                        holding_period=holding_days,
+                        commission=total_commission
+                    ))
+                    
+                    # 큐 업데이트
+                    remaining_sell_qty -= match_qty
+                    buy_item['quantity'] -= match_qty
+                    
+                    if buy_item['quantity'] <= 0.000001: # 부동소수점 오차 고려
+                        buy_queue.pop(0)
+                        
+        return completed_trades
+
+    @staticmethod
+    def calculate_symbol_metrics(trades: List[Trade]) -> SymbolPerformance:
+        """종목별 성과 메트릭 계산"""
+        if not trades:
+            return None
+            
+        symbol = trades[0].symbol
+        completed_trades = TradeAnalyzer.match_entry_exit(trades)
+        
+        if not completed_trades:
+            return SymbolPerformance(symbol, 0, 0, 0, 0, 0, 0)
+            
+        total_pnl = sum(t.pnl for t in completed_trades)
+        wins = [t for t in completed_trades if t.pnl > 0]
+        losses = [t for t in completed_trades if t.pnl <= 0]
+        
+        win_rate = len(wins) / len(completed_trades) if completed_trades else 0.0
+        
+        gross_profit = sum(t.pnl for t in wins)
+        gross_loss = abs(sum(t.pnl for t in losses))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        
+        avg_holding = np.mean([t.holding_period for t in completed_trades])
+        
+        # 총 수익률 (단순 합산 방식, 자본금 대비 아님에 유의)
+        total_return_sum = sum(t.return_pct for t in completed_trades)
+        
+        return SymbolPerformance(
+            symbol=symbol,
+            total_return=total_return_sum,
+            trade_count=len(completed_trades),
+            win_rate=win_rate,
+            profit_factor=profit_factor,
+            avg_holding_period=avg_holding,
+            total_pnl=total_pnl
+        )
 
 
 def calculate_metrics(

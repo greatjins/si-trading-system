@@ -6,9 +6,11 @@ import { useOrderStore } from '../../../app/store/orderStore';
 import { useChartStore } from '../../../app/store/chartStore';
 import { createOrder } from '../services/orderApi';
 import { ORDER_SIDE, ORDER_TYPE } from '../../../constants/order-types';
+import { getSymbolName } from '../../../utils/symbols';
 
 export const OrderPanel = () => {
   const { symbol } = useChartStore();
+  const symbolName = getSymbolName(symbol);
   const { addOrder } = useOrderStore();
   
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
@@ -57,7 +59,10 @@ export const OrderPanel = () => {
       
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label>종목: {symbol}</label>
+          <label>
+            종목: {symbol}
+            {symbolName ? ` (${symbolName})` : ''}
+          </label>
         </div>
         
         <div className="form-group">

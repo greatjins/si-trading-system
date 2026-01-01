@@ -128,12 +128,15 @@ class BacktestEngine:
         # 초기화
         self._reset()
         
+        # [성능 최적화] 루프 밖에서 전체 데이터를 DataFrame으로 변환 (1회 수행)
+        full_df = self._convert_to_dataframe(ohlc_data)
+        
         # OHLC 바 반복
         for i in range(len(ohlc_data)):
             current_bar = ohlc_data[i]
             
-            # 전략에 제공할 과거 데이터 (현재 바까지) - DataFrame으로 변환
-            historical_bars = self._convert_to_dataframe(ohlc_data[:i+1])
+            # [성능 최적화] 이미 변환된 DataFrame에서 슬라이싱만 수행 (메모리 복사 최소화)
+            historical_bars = full_df.iloc[:i+1]
             
             # 현재 계좌 상태
             account = self._get_account_state()

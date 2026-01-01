@@ -140,6 +140,7 @@ interface PyramidLevel {
 interface Strategy {
   name: string;
   description: string;
+  is_portfolio?: boolean; // 단일 종목(false) vs 포트폴리오(true)
   // 종목 선정
   stockSelection: {
     // 기본 필터
@@ -283,6 +284,7 @@ export const StrategyBuilderPage = () => {
         setStrategy({
           name: loadedStrategy.config.name,
           description: loadedStrategy.config.description,
+          is_portfolio: loadedStrategy.config.is_portfolio ?? false,
           stockSelection: loadedStrategy.config.stockSelection,
           buyConditions: loadedStrategy.config.buyConditions.map((condition: any) => ({
             ...condition,
@@ -307,6 +309,7 @@ export const StrategyBuilderPage = () => {
   const [strategy, setStrategy] = useState<Strategy>({
     name: '',
     description: '',
+    is_portfolio: false, // 기본값: 단일 종목 전략
     stockSelection: {
       excludeManaged: true,
       excludeClearing: true,
@@ -447,6 +450,7 @@ export const StrategyBuilderPage = () => {
     }
     
     console.log('💾 전략 저장:', strategy);
+    console.log('  is_portfolio:', strategy.is_portfolio);
     
     try {
       // 백엔드 호환성을 위해 조건 값들을 문자열로 변환
@@ -522,6 +526,27 @@ export const StrategyBuilderPage = () => {
               className="form-textarea"
               rows={3}
             />
+          </div>
+          <div className="form-group">
+            <label>전략 타입</label>
+            <select
+              value={strategy.is_portfolio ? 'portfolio' : 'single'}
+              onChange={(e) => {
+                setStrategy({
+                  ...strategy,
+                  is_portfolio: e.target.value === 'portfolio'
+                });
+              }}
+              className="form-input"
+            >
+              <option value="single">단일 종목 전략</option>
+              <option value="portfolio">포트폴리오 전략</option>
+            </select>
+            <p className="form-help">
+              {strategy.is_portfolio 
+                ? '📊 포트폴리오 전략: 여러 종목을 자동으로 선택하여 거래합니다. 백테스트 시 symbol 파라미터가 필요 없습니다.'
+                : '🎯 단일 종목 전략: 하나의 종목만 거래합니다. 백테스트 시 symbol 파라미터가 필요합니다.'}
+            </p>
           </div>
         </div>
         

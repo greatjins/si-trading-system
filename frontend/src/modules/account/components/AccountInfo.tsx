@@ -13,45 +13,154 @@ export const AccountInfo = () => {
   useEffect(() => {
     if (!selectedAccountId) return;
     
+    // 토큰이 있는지 확인
+    const hasToken = () => {
+      try {
+        const authData = sessionStorage.getItem('auth_data');
+        if (!authData) return false;
+        const tokenData = JSON.parse(authData);
+        // 만료 시간에 여유를 둠 (30초 전부터 만료로 간주)
+        return tokenData.access_token && Date.now() < (tokenData.expires_at - 30000);
+      } catch {
+        return false;
+      }
+    };
+    
+    let intervalId: NodeJS.Timeout | null = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    
     // 계좌 잔고 조회
     const loadBalance = async () => {
+      // 토큰이 없으면 요청하지 않음
+      if (!hasToken()) {
+        console.debug('계좌 잔고 조회 건너뜀: 토큰 없음');
+        setError('로그인이 필요합니다');
+        setLoading(false);
+        retryCount++;
+        // 연속으로 3번 실패하면 interval 중지
+        if (retryCount >= MAX_RETRIES && intervalId) {
+          console.debug('계좌 잔고 조회 중지: 토큰 없음 (3회 연속)');
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+        return;
+      }
+      
+      // 성공하면 retryCount 리셋
+      retryCount = 0;
+      
       setLoading(true);
       try {
         const response = await httpClient.get(`/api/accounts/${selectedAccountId}/balance`);
         setAccountBalance(response.data);
-      } catch (error) {
+      } catch (error: any) {
+        // 403 에러는 인증 문제이므로 조용히 무시
+        if (error.response?.status === 403) {
+          console.debug('계좌 잔고 조회 실패 (인증 필요):', error.response?.data?.detail);
+          setError('로그인이 필요합니다');
+          retryCount++;
+          // 연속으로 3번 실패하면 interval 중지
+          if (retryCount >= MAX_RETRIES && intervalId) {
+            console.debug('계좌 잔고 조회 중지: 인증 실패 (3회 연속)');
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+          return;
+        }
         console.error('계좌 잔고 조회 실패:', error);
         setError('계좌 정보를 불러올 수 없습니다');
+      } finally {
+        setLoading(false);
       }
     };
     
-    loadBalance();
-    
-    // 주기적으로 업데이트 (30초마다)
-    const interval = setInterval(() => {
+    // 초기 요청은 약간 지연 (토큰 로드 대기)
+    const timeoutId = setTimeout(() => {
       loadBalance();
-    }, 30000);
+      // interval 시작 (30초마다)
+      intervalId = setInterval(loadBalance, 30000);
+    }, 100);
     
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(timeoutId);
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [selectedAccountId, setAccountBalance, setLoading, setError]);
   
   // 연결 상태 조회
   useEffect(() => {
     if (!selectedAccountId) return;
     
+    // 토큰이 있는지 확인
+    const hasToken = () => {
+      try {
+        const authData = sessionStorage.getItem('auth_data');
+        if (!authData) return false;
+        const tokenData = JSON.parse(authData);
+        // 만료 시간에 여유를 둠 (30초 전부터 만료로 간주)
+        return tokenData.access_token && Date.now() < (tokenData.expires_at - 30000);
+      } catch {
+        return false;
+      }
+    };
+    
+    let intervalId: NodeJS.Timeout | null = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    
     const checkConnection = async () => {
+      // 토큰이 없으면 요청하지 않음
+      if (!hasToken()) {
+        console.debug('연결 상태 조회 건너뜀: 토큰 없음');
+        retryCount++;
+        // 연속으로 3번 실패하면 interval 중지
+        if (retryCount >= MAX_RETRIES && intervalId) {
+          console.debug('연결 상태 조회 중지: 토큰 없음 (3회 연속)');
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+        return;
+      }
+      
+      // 성공하면 retryCount 리셋
+      retryCount = 0;
+      
       try {
         const response = await httpClient.get(`/api/accounts/${selectedAccountId}/connection-status`);
         setConnectionStatus(response.data);
-      } catch (error) {
+      } catch (error: any) {
+        // 403 에러는 인증 문제이므로 조용히 무시
+        if (error.response?.status === 403) {
+          console.debug('연결 상태 조회 실패 (인증 필요):', error.response?.data?.detail);
+          retryCount++;
+          // 연속으로 3번 실패하면 interval 중지
+          if (retryCount >= MAX_RETRIES && intervalId) {
+            console.debug('연결 상태 조회 중지: 인증 실패 (3회 연속)');
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+          return;
+        }
         console.error('연결 상태 조회 실패:', error);
       }
     };
     
-    checkConnection();
-    const interval = setInterval(checkConnection, 10000); // 10초마다
+    // 초기 요청은 약간 지연 (토큰 로드 대기)
+    const timeoutId = setTimeout(() => {
+      checkConnection();
+      // interval 시작 (10초마다)
+      intervalId = setInterval(checkConnection, 10000);
+    }, 100);
     
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(timeoutId);
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [selectedAccountId]);
   
   // 연결 종료 핸들러 (향후 사용 예정)

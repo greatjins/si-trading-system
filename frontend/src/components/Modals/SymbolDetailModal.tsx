@@ -246,8 +246,12 @@ export const SymbolDetailModal: React.FC<SymbolDetailModalProps> = ({
                     <span>{(symbolDetail.avg_holding_days ?? 0).toFixed(1)}일</span>
                   </div>
                   <div className="info-row">
-                    <span>총 거래 횟수:</span>
-                    <span>{symbolDetail.all_trades.length}회</span>
+                    <span>매수 체결 수:</span>
+                    <span>{symbolDetail.all_trades.filter(t => t.side === 'buy').length}건</span>
+                  </div>
+                  <div className="info-row">
+                    <span>매도 체결 수:</span>
+                    <span>{symbolDetail.all_trades.filter(t => t.side === 'sell').length}건</span>
                   </div>
                 </div>
               </div>

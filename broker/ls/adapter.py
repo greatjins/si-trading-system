@@ -60,6 +60,10 @@ class LSAdapter(BrokerBase):
         self.market_service = LSMarketService(self.client)
         self.realtime_service = None  # TODO: 실시간 서비스 구현
         
+        # FileStorage 인스턴스 (캐싱용)
+        from data.storage import FileStorage
+        self.storage = FileStorage()
+        
         mode = "모의투자" if self.paper_trading else "실거래"
         logger.info(f"LSAdapter initialized for account: {self.account_id} ({mode})")
     
@@ -80,7 +84,12 @@ class LSAdapter(BrokerBase):
         end_date: datetime
     ) -> List[OHLC]:
         """
-        과거 OHLC 데이터 가져오기
+        과거 OHLC 데이터 가져오기 (Parquet 캐싱 지원)
+        
+        캐싱 전략:
+        1. Parquet 파일에서 로드 시도
+        2. 없거나 불완전하면 API 호출
+        3. API 데이터를 Parquet에 저장
         
         Args:
             symbol: 종목 코드
@@ -91,7 +100,17 @@ class LSAdapter(BrokerBase):
         Returns:
             OHLC 데이터 리스트
         """
-        logger.info(f"Getting OHLC: {symbol}, {interval}")
+        logger.info(f"Getting OHLC: {symbol}, {interval} ({start_date.date()} ~ {end_date.date()})")
+        
+        # Parquet 캐시 확인
+        cached_data = await self.storage.load_ohlc(symbol, interval, start_date, end_date)
+        
+        if cached_data:
+            logger.info(f"✓ Loaded {len(cached_data)} bars from Parquet cache")
+            return cached_data
+        
+        # 캐시에 없으면 API 호출
+        logger.info("Cache miss - fetching from API...")
         
         if interval == "1d":
             ohlc_list = await self.market_service.get_daily_ohlc(symbol, start_date, end_date)
@@ -103,6 +122,11 @@ class LSAdapter(BrokerBase):
             ohlc_list = await self.market_service.get_minute_ohlc(symbol, minutes, count)
         else:
             raise ValueError(f"Unsupported interval: {interval}")
+        
+        # API 데이터를 Parquet에 저장
+        if ohlc_list:
+            await self.storage.save_ohlc(symbol, interval, ohlc_list)
+            logger.info(f"✓ Saved {len(ohlc_list)} bars to Parquet cache")
         
         return ohlc_list
     

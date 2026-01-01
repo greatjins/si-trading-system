@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts';
 import { useChartStore } from '../../../app/store/chartStore';
 import { CHART_COLORS } from '../../../constants/chart-constants';
+import { getSymbolName } from '../../../utils/symbols';
 
 export const CandlestickChart = () => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -12,6 +13,7 @@ export const CandlestickChart = () => {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   
   const { candles, symbol } = useChartStore();
+  const symbolName = getSymbolName(symbol);
   
   // 차트 초기화
   useEffect(() => {
@@ -86,7 +88,10 @@ export const CandlestickChart = () => {
   return (
     <div className="chart-container">
       <div className="chart-header">
-        <h3>{symbol} 차트</h3>
+        <h3>
+          {symbol}
+          {symbolName ? ` (${symbolName})` : ''} 차트
+        </h3>
       </div>
       <div ref={chartContainerRef} className="chart" />
     </div>

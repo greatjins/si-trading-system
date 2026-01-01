@@ -106,6 +106,14 @@ export const BacktestPage = () => {
     // 선택된 전략 찾기
     const strategy = strategies.find(s => s.name === selectedStrategy);
     const isPortfolio = strategy?.is_portfolio || portfolioStrategies.includes(selectedStrategy);
+    
+    console.log(`🔍 전략 타입 확인: ${selectedStrategy}`, {
+      strategy: strategy,
+      is_portfolio_from_api: strategy?.is_portfolio,
+      is_in_hardcoded_list: portfolioStrategies.includes(selectedStrategy),
+      final_is_portfolio: isPortfolio
+    });
+    
     setIsPortfolioStrategy(isPortfolio);
     
     // 전략별 기본 파라미터 설정

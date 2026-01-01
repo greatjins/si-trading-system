@@ -235,7 +235,11 @@ class BaseStrategy(ABC):
             True: 포트폴리오 전략 (여러 종목)
             False: 단일 종목 전략
         """
-        # select_universe가 오버라이드되었는지 확인
+        # 우선순위 1: params에 명시적으로 is_portfolio가 있으면 사용
+        if 'is_portfolio' in self.params:
+            return bool(self.params.get('is_portfolio', False))
+        
+        # 우선순위 2: select_universe가 오버라이드되었는지 확인
         return self.__class__.select_universe != BaseStrategy.select_universe
     
     def __repr__(self) -> str:
