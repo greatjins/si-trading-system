@@ -15,6 +15,7 @@ from utils.exceptions import RiskLimitError
 from utils.config import config
 from utils.bar_utils import create_bars_from_ticks, validate_bars
 from utils.signal_logger import get_signal_logger, SignalType
+from core.notifications.manager import NotificationManager, NotificationType
 
 logger = setup_logger(__name__)
 signal_logger = get_signal_logger()
@@ -33,7 +34,8 @@ class ExecutionEngine:
         strategy: BaseStrategy,
         broker: BrokerBase,
         risk_manager: RiskManager,
-        timeframe: str = None
+        timeframe: str = None,
+        notification_manager: Optional[NotificationManager] = None
     ):
         """
         Args:
@@ -41,6 +43,7 @@ class ExecutionEngine:
             broker: 브로커 어댑터
             risk_manager: 리스크 관리자
             timeframe: 타임프레임 (예: "1m", "5m", "1h") - None이면 config에서 로드
+            notification_manager: 알림 관리자 (Phase 3.3)
         """
         self.strategy = strategy
         self.broker = broker
@@ -67,6 +70,9 @@ class ExecutionEngine:
         self.error_count: int = 0
         self.strategy_id: Optional[int] = None  # 전략 ID (DB 연동용)
         
+        # 알림 관리자 (Phase 3.3)
+        self.notification_manager = notification_manager or NotificationManager()
+        
         logger.info(f"ExecutionEngine initialized: {strategy.name}, timeframe={self.timeframe}")
     
     async def start(self, symbols: List[str]) -> None:
@@ -86,6 +92,14 @@ class ExecutionEngine:
         self.last_error = None
         self.error_count = 0
         
+        # 전략 시작 알림 (Phase 3.3)
+        self.notification_manager.notify(
+            type=NotificationType.STRATEGY_STARTED,
+            title="전략 시작",
+            message=f"전략 '{self.strategy.name}' 실행 시작",
+            metadata={"strategy_id": self.strategy_id, "symbols": symbols}
+        )
+        
         logger.info(f"Starting execution engine for {symbols}")
         
         try:
@@ -102,14 +116,35 @@ class ExecutionEngine:
             logger.error(f"Execution engine error: {e}")
             self.last_error = str(e)
             self.error_count += 1
+            # 에러 알림 (Phase 3.3)
+            self.notification_manager.notify_error(
+                strategy_id=self.strategy_id,
+                error_message=str(e),
+                error_type=type(e).__name__
+            )
         finally:
             self.is_running = False
+            # 전략 중지 알림 (Phase 3.3)
+            self.notification_manager.notify(
+                type=NotificationType.STRATEGY_STOPPED,
+                title="전략 중지",
+                message=f"전략 '{self.strategy.name}' 실행 중지",
+                metadata={"strategy_id": self.strategy_id}
+            )
             logger.info("Execution engine stopped")
     
     async def stop(self) -> None:
         """실행 중단"""
         logger.info("Stopping execution engine...")
         self.is_running = False
+        
+        # 전략 중지 알림 (Phase 3.3)
+        self.notification_manager.notify(
+            type=NotificationType.STRATEGY_STOPPED,
+            title="전략 중지",
+            message=f"전략 '{self.strategy.name}' 실행 중지",
+            metadata={"strategy_id": self.strategy_id}
+        )
     
     async def _process_price_update(self, update: Dict[str, Any]) -> None:
         """
@@ -140,9 +175,25 @@ class ExecutionEngine:
             if not self.risk_manager.check_risk_limits(account):
                 logger.warning("Risk limits exceeded, skipping strategy execution")
                 
+                # 리스크 한도 초과 알림 (Phase 3.3)
+                risk_status = self.risk_manager.get_risk_status()
+                if risk_status.get("mdd_exceeded"):
+                    self.notification_manager.notify_risk_limit(
+                        limit_type="MDD",
+                        current_value=risk_status.get("current_mdd", 0.0),
+                        limit_value=risk_status.get("max_mdd", 0.0)
+                    )
+                
                 # 긴급 정지 시 모든 포지션 청산
                 if self.risk_manager.emergency_stop:
                     await self._emergency_liquidate(positions)
+                    # 전략 긴급 중지 알림
+                    self.notification_manager.notify(
+                        type=NotificationType.STRATEGY_STOPPED,
+                        title="전략 긴급 중지",
+                        message=f"리스크 한도 초과로 전략이 중지되었습니다",
+                        metadata={"strategy_id": self.strategy_id, "reason": "risk_limit"}
+                    )
                 
                 return
             
@@ -166,6 +217,12 @@ class ExecutionEngine:
                 
                 except Exception as e:
                     logger.error(f"Strategy execution error for {symbol}: {e}", exc_info=True)
+                    # 에러 알림 (Phase 3.3)
+                    self.notification_manager.notify_error(
+                        strategy_id=self.strategy_id,
+                        error_message=str(e),
+                        error_type=type(e).__name__
+                    )
         
         except Exception as e:
             logger.error(f"Error processing price update: {e}")
@@ -224,6 +281,7 @@ class ExecutionEngine:
                 # 체결 성공 시 거래 기록
                 if filled:
                     self.risk_manager.record_trade(signal.symbol)
+                    self.last_execution_time = datetime.now()
                 
                 return  # 성공 시 종료
             
@@ -412,6 +470,18 @@ class ExecutionEngine:
                         await result
                 except Exception as e:
                     logger.error(f"Error in order filled callback: {e}", exc_info=True)
+            
+            # 주문 체결 알림 (Phase 3.3)
+            try:
+                self.notification_manager.notify_order_filled(
+                    order_id=order_id,
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    quantity=order.filled_quantity or order.quantity,
+                    price=order.filled_price or order.price or 0.0
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send order filled notification: {e}")
             
             # 정리
             self._cleanup_order(order_id)
