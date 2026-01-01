@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageLayout } from '../components/Layout/PageLayout';
 import { httpClient } from '../services/http';
+import { StrategyStatusComponent } from '../modules/strategies/components/StrategyStatus';
 
 interface Strategy {
   strategy_id: number;
@@ -116,6 +117,19 @@ export default function StrategyListPage() {
                     <span className="created-at">
                       생성일: {new Date(strategy.created_at).toLocaleDateString()}
                     </span>
+                  </div>
+                  <div className="strategy-status-section">
+                    <StrategyStatusComponent
+                      strategyId={strategy.strategy_id}
+                      onStart={() => {
+                        // TODO: 전략 시작 로직
+                        console.log('Start strategy:', strategy.strategy_id);
+                      }}
+                      onStop={() => {
+                        // TODO: 전략 중지 로직
+                        console.log('Stop strategy:', strategy.strategy_id);
+                      }}
+                    />
                   </div>
                 </div>
               </div>

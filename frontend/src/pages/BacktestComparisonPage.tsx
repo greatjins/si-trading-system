@@ -1,6 +1,7 @@
 /**
  * 백테스트 비교 페이지
  */
+import { ComparisonView } from '../modules/analysis/components/ComparisonView';
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageLayout } from '../components/Layout/PageLayout';
@@ -324,6 +325,12 @@ export const BacktestComparisonPage: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+
+        {/* 백테스트-실전 비교 (Phase 4) */}
+        <div className="backtest-live-comparison-section">
+          <h3>백테스트 vs 실전 비교</h3>
+          <ComparisonView />
         </div>
 
         {/* 비교 결과 */}

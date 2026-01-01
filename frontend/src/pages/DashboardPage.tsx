@@ -9,6 +9,8 @@ import { OrderHistory } from '../modules/trading/components/OrderHistory';
 import { AccountInfo } from '../modules/account/components/AccountInfo';
 import { AccountSelector } from '../components/AccountSelector';
 import { useChart } from '../modules/chart/hooks/useChart';
+import { ProfitDashboard } from '../modules/dashboard/components/ProfitDashboard';
+import { NotificationCenter } from '../modules/notifications/components/NotificationCenter';
 
 export const DashboardPage = () => {
   const { isLoading, error } = useChart();
@@ -24,6 +26,16 @@ export const DashboardPage = () => {
         {/* 계좌 정보 */}
         <div className="account-section">
           <AccountInfo />
+        </div>
+        
+        {/* 수익 대시보드 */}
+        <div className="profit-section">
+          <ProfitDashboard />
+        </div>
+        
+        {/* 알림 센터 */}
+        <div className="notification-section">
+          <NotificationCenter />
         </div>
         
         {/* 메인 컨텐츠 */}
