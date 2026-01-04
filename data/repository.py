@@ -2,14 +2,15 @@
 데이터베이스 Repository
 """
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
+import asyncio
 from sqlalchemy import create_engine, desc
 from sqlalchemy.orm import sessionmaker, Session
 
 from data.models import Base, BacktestResultModel, TradeModel, StrategyConfigModel
 from data.storage import FileStorage
-from utils.types import BacktestResult, Trade
+from utils.types import BacktestResult, Trade, OHLC
 from utils.logger import setup_logger
 from utils.config import config
 
@@ -69,30 +70,94 @@ class DataRepository:
         end_date: datetime = None
     ) -> pd.DataFrame:
         """
-        OHLC 데이터 조회 (DB 우선, 파일 폴백)
+        OHLC 데이터 조회 (로컬 캐시 우선, 부족하면 브로커 API 호출)
+        
+        로직:
+        1. 로컬 캐시(Parquet/DB)에 데이터가 있는지 확인
+        2. 데이터가 없거나 부족할 경우, broker/ls/client.py를 사용하여 API 호출
+           - 일봉: TR 't8413'
+           - 60분봉: TR 't8410'
+        3. API로부터 받은 JSON 응답을 시스템 표준 스키마로 변환
+        4. 변환된 데이터를 Parquet 파일로 즉시 저장(Caching)한 뒤 DataFrame 반환
+        5. LS증권 API의 초당 호출 제한을 고려한 지연 로직 포함
         
         Args:
             symbol: 종목 코드
-            interval: 시간 간격
+            interval: 시간 간격 ("1d": 일봉, "60m": 60분봉)
             start_date: 시작일
             end_date: 종료일
             
         Returns:
-            OHLC DataFrame
+            OHLC DataFrame (columns: open, high, low, close, volume, index: timestamp)
         """
         try:
-            # 1. DB에서 조회 시도
-            if self.use_db and self.ohlc_repo:
-                data = self.ohlc_repo.get_ohlc(symbol, interval, start_date, end_date)
-                if not data.empty:
-                    logger.debug(f"Loaded {len(data)} records from DB: {symbol}")
-                    return data
+            # 기본 날짜 설정 (없으면 최근 1년)
+            if end_date is None:
+                end_date = datetime.now()
+            if start_date is None:
+                start_date = end_date - timedelta(days=365)
             
-            # 2. 파일에서 조회 (폴백)
-            data = self.storage.load(symbol, interval)
+            # 1. 로컬 캐시 확인: DB에서 조회 시도
+            cached_data = None
+            if self.use_db and self.ohlc_repo:
+                cached_data = self.ohlc_repo.get_ohlc(symbol, interval, start_date, end_date)
+                if not cached_data.empty:
+                    # 요청한 날짜 범위의 데이터가 충분한지 확인
+                    if cached_data.index.min() <= start_date and cached_data.index.max() >= end_date:
+                        logger.debug(f"Loaded {len(cached_data)} records from DB: {symbol}")
+                        return cached_data
+            
+            # 2. 로컬 캐시 확인: Parquet 파일에서 조회 시도
+            if cached_data is None or cached_data.empty:
+                cached_data = self.storage.load(symbol, interval)
+                
+                # 날짜 필터링
+                if not cached_data.empty:
+                    if start_date:
+                        cached_data = cached_data[cached_data.index >= start_date]
+                    if end_date:
+                        cached_data = cached_data[cached_data.index <= end_date]
+                    
+                    # 요청한 날짜 범위의 데이터가 충분한지 확인
+                    if not cached_data.empty:
+                        if cached_data.index.min() <= start_date and cached_data.index.max() >= end_date:
+                            logger.debug(f"Loaded {len(cached_data)} records from file: {symbol}")
+                            return cached_data
+            
+            # 3. 데이터가 없거나 부족하면 브로커 API 호출
+            logger.info(f"Cache miss or insufficient data for {symbol} ({interval}), fetching from broker API...")
+            
+            # 비동기 브로커 API 호출
+            ohlc_list = self._fetch_from_ls_api(symbol, interval, start_date, end_date)
+            
+            if not ohlc_list:
+                logger.warning(f"No data fetched from broker API for {symbol}")
+                # 캐시된 데이터가 있으면 반환
+                if cached_data is not None and not cached_data.empty:
+                    return cached_data
+                return pd.DataFrame()
+            
+            # 4. OHLC 리스트를 DataFrame으로 변환 (표준 스키마)
+            data = pd.DataFrame([
+                {
+                    'timestamp': ohlc.timestamp,
+                    'open': ohlc.open,
+                    'high': ohlc.high,
+                    'low': ohlc.low,
+                    'close': ohlc.close,
+                    'volume': ohlc.volume
+                }
+                for ohlc in ohlc_list
+            ])
             
             if data.empty:
-                return data
+                # 캐시된 데이터가 있으면 반환
+                if cached_data is not None and not cached_data.empty:
+                    return cached_data
+                return pd.DataFrame()
+            
+            # timestamp를 인덱스로 설정
+            data.set_index('timestamp', inplace=True)
             
             # 날짜 필터링
             if start_date:
@@ -100,12 +165,273 @@ class DataRepository:
             if end_date:
                 data = data[data.index <= end_date]
             
-            logger.debug(f"Loaded {len(data)} records from file: {symbol}")
+            # 5. Parquet 파일에 즉시 저장 (Caching)
+            try:
+                # 비동기 저장을 동기로 래핑
+                self._save_to_parquet(symbol, interval, ohlc_list)
+                logger.info(f"Saved {len(ohlc_list)} OHLC records to Parquet: {symbol}")
+            except Exception as e:
+                logger.warning(f"Failed to save to Parquet: {e}")
+            
+            # DB에 저장 시도 (선택적)
+            if self.use_db and self.ohlc_repo and not data.empty:
+                try:
+                    self._save_to_db(symbol, interval, ohlc_list)
+                except Exception as e:
+                    logger.warning(f"Failed to save to DB: {e}")
+            
+            logger.info(f"Loaded {len(data)} records from broker API: {symbol}")
             return data
         
         except Exception as e:
-            logger.error(f"Failed to get OHLC data: {e}")
+            logger.error(f"Failed to get OHLC data: {e}", exc_info=True)
             return pd.DataFrame()
+    
+    def _fetch_from_ls_api(
+        self,
+        symbol: str,
+        interval: str,
+        start_date: datetime,
+        end_date: datetime
+    ) -> List[OHLC]:
+        """
+        LS증권 API에서 OHLC 데이터 가져오기 (동기 래퍼)
+        
+        - 일봉: TR 't8413' 사용
+        - 60분봉: TR 't8410' 사용
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격 ("1d": 일봉, "60m": 60분봉)
+            start_date: 시작일
+            end_date: 종료일
+        
+        Returns:
+            OHLC 데이터 리스트
+        """
+        async def _async_fetch():
+            try:
+                from broker.ls.client import LSClient
+                import asyncio
+                
+                # LSClient 초기화 및 연결
+                async with LSClient() as client:
+                    # interval에 따라 TR 코드 결정
+                    if interval == "1d":
+                        # 일봉: TR 't8413'
+                        tr_id = "t8413"
+                        tr_in_block = "t8413InBlock"
+                        tr_out_block = "t8413OutBlock1"
+                        
+                        # 일봉 요청 파라미터
+                        request_data = {
+                            tr_in_block: {
+                                "shcode": symbol,
+                                "gubun": "2",  # 2:일봉
+                                "qrycnt": 500,  # 최대 조회 개수
+                                "sdate": start_date.strftime("%Y%m%d"),
+                                "edate": end_date.strftime("%Y%m%d"),
+                                "cts_date": "",
+                                "comp_yn": "N",  # 압축 여부
+                                "sujung": "Y",  # 수정주가 여부
+                                "exchgubun": "U"  # U:통합
+                            }
+                        }
+                    elif interval == "60m":
+                        # 60분봉: TR 't8410'
+                        tr_id = "t8410"
+                        tr_in_block = "t8410InBlock"
+                        tr_out_block = "t8410OutBlock1"
+                        
+                        # 60분봉 요청 파라미터
+                        # 분봉은 날짜 범위 대신 개수 기반 조회
+                        days_diff = (end_date - start_date).days
+                        qrycnt = min(days_diff * 6, 500)  # 하루 최대 6개 (9:00-15:30, 60분 간격)
+                        
+                        request_data = {
+                            tr_in_block: {
+                                "shcode": symbol,
+                                "ncnt": 60,  # 60분봉
+                                "qrycnt": qrycnt,
+                                "nday": "1",  # 조회영업일수
+                                "sdate": start_date.strftime("%Y%m%d"),
+                                "stime": "0900",  # 시작시간
+                                "edate": end_date.strftime("%Y%m%d"),
+                                "etime": "1530",  # 종료시간
+                                "cts_date": "",
+                                "cts_time": "",
+                                "comp_yn": "N",
+                                "exchgubun": "U"
+                            }
+                        }
+                    else:
+                        logger.error(f"Unsupported interval: {interval}. Only '1d' and '60m' are supported.")
+                        return []
+                    
+                    # API 호출
+                    response = await client.request(
+                        method="POST",
+                        endpoint="/stock/chart",
+                        data=request_data,
+                        headers={
+                            "tr_id": tr_id,
+                            "tr_cont": "N",
+                            "custtype": "P"
+                        }
+                    )
+                    
+                    # 5. LS증권 API 호출 제한 고려 (초당 1건)
+                    await asyncio.sleep(1.1)
+                    
+                    # JSON 응답을 표준 스키마로 변환
+                    ohlc_list = []
+                    items = response.get(tr_out_block, [])
+                    
+                    logger.info(f"Fetched {len(items)} records from LS API (TR: {tr_id})")
+                    
+                    for item in items:
+                        try:
+                            # 일봉과 60분봉의 필드명이 다를 수 있으므로 처리
+                            if interval == "1d":
+                                # 일봉 필드명 (예상)
+                                date_str = item.get("date", "")
+                                timestamp = datetime.strptime(date_str, "%Y%m%d")
+                                open_price = float(item.get("open", 0))
+                                high_price = float(item.get("high", 0))
+                                low_price = float(item.get("low", 0))
+                                close_price = float(item.get("close", 0))
+                                volume = int(item.get("jdiff_vol", item.get("volume", 0)))
+                            else:  # 60분봉
+                                # 60분봉 필드명 (예상)
+                                date_str = item.get("date", "")
+                                time_str = item.get("time", "0000")
+                                timestamp = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M")
+                                open_price = float(item.get("open", 0))
+                                high_price = float(item.get("high", 0))
+                                low_price = float(item.get("low", 0))
+                                close_price = float(item.get("close", 0))
+                                volume = int(item.get("jdiff_vol", item.get("volume", 0)))
+                            
+                            # 표준 OHLC 객체 생성
+                            ohlc = OHLC(
+                                symbol=symbol,
+                                timestamp=timestamp,
+                                open=open_price,
+                                high=high_price,
+                                low=low_price,
+                                close=close_price,
+                                volume=volume
+                            )
+                            ohlc_list.append(ohlc)
+                        except Exception as e:
+                            logger.warning(f"Failed to parse OHLC item: {e}, item: {item}")
+                            continue
+                    
+                    return ohlc_list
+                    
+            except Exception as e:
+                logger.error(f"Failed to fetch from LS API: {e}", exc_info=True)
+                return []
+        
+        try:
+            # 기존 이벤트 루프가 있으면 사용, 없으면 새로 생성
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새 스레드에서 실행
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _async_fetch())
+                        return future.result()
+                else:
+                    return loop.run_until_complete(_async_fetch())
+            except RuntimeError:
+                # 이벤트 루프가 없으면 새로 생성
+                return asyncio.run(_async_fetch())
+        except Exception as e:
+            logger.error(f"Error in _fetch_from_ls_api: {e}", exc_info=True)
+            return []
+    
+    def _save_to_db(
+        self,
+        symbol: str,
+        interval: str,
+        ohlc_list: List[OHLC]
+    ):
+        """
+        DB에 OHLC 데이터 저장 (동기 래퍼)
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+            ohlc_list: OHLC 데이터 리스트
+        """
+        if not self.use_db or not self.ohlc_repo:
+            return
+        
+        async def _async_save():
+            try:
+                saved_count = await self.ohlc_repo.save_ohlc_batch(ohlc_list, interval)
+                logger.info(f"Saved {saved_count} OHLC records to DB: {symbol}")
+            except Exception as e:
+                logger.error(f"Failed to save to DB: {e}", exc_info=True)
+        
+        try:
+            # 기존 이벤트 루프가 있으면 사용, 없으면 새로 생성
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새 스레드에서 실행
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _async_save())
+                        future.result()
+                else:
+                    loop.run_until_complete(_async_save())
+            except RuntimeError:
+                # 이벤트 루프가 없으면 새로 생성
+                asyncio.run(_async_save())
+        except Exception as e:
+            logger.error(f"Error in _save_to_db: {e}", exc_info=True)
+    
+    def _save_to_parquet(
+        self,
+        symbol: str,
+        interval: str,
+        ohlc_list: List[OHLC]
+    ):
+        """
+        Parquet 파일에 OHLC 데이터 저장 (동기 래퍼)
+        
+        Args:
+            symbol: 종목 코드
+            interval: 시간 간격
+            ohlc_list: OHLC 데이터 리스트
+        """
+        async def _async_save():
+            try:
+                await self.storage.save_ohlc(symbol, interval, ohlc_list)
+            except Exception as e:
+                logger.error(f"Failed to save to Parquet: {e}", exc_info=True)
+                raise
+        
+        try:
+            # 기존 이벤트 루프가 있으면 사용, 없으면 새로 생성
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새 스레드에서 실행
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _async_save())
+                        future.result()
+                else:
+                    loop.run_until_complete(_async_save())
+            except RuntimeError:
+                # 이벤트 루프가 없으면 새로 생성
+                asyncio.run(_async_save())
+        except Exception as e:
+            logger.error(f"Error in _save_to_parquet: {e}", exc_info=True)
     
     def get_ohlc_as_list(
         self,

@@ -3,6 +3,7 @@ ICT (Inner Circle Trader) 기반 전략
 - Smart Money Concepts 적용
 - 기관투자자 관점의 시장 분석
 - 유동성 기반 진입/청산
+- Multi-timeframe 분석: 일봉 FVG/OB + 60분봉 MSS
 """
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
@@ -13,6 +14,8 @@ from core.strategy.base import BaseStrategy
 from core.strategy.registry import strategy
 from utils.types import OHLC, Position, Account, OrderSignal, OrderSide, OrderType, Order
 from utils.logger import setup_logger
+from utils.indicators import calculate_fvg, calculate_order_block, calculate_mss
+from data.repository import DataRepository
 
 logger = setup_logger(__name__)
 
@@ -95,6 +98,11 @@ class ICTStrategy(BaseStrategy):
         self.liquidity_pools = {"highs": [], "lows": []}
         self.fair_value_gaps = []
         
+        # Multi-timeframe 분석용
+        self.daily_fvgs = []  # 일봉 FVG 구간들
+        self.daily_obs = []   # 일봉 Order Block 구간들
+        self.repository = DataRepository()  # 데이터 로드용
+        
         logger.info(f"ICT Strategy initialized: {self.symbol}")
     
     def on_bar(
@@ -104,37 +112,61 @@ class ICTStrategy(BaseStrategy):
         account: Account
     ) -> List[OrderSignal]:
         """
-        ICT 분석 및 신호 생성
+        ICT 분석 및 신호 생성 (Multi-timeframe)
+        
+        로직:
+        1. 일봉(1d) 데이터에서 FVG와 OB 구간을 먼저 계산
+        2. 60분봉 데이터의 현재가가 일봉에서 계산된 OB/FVG 구간에 진입했는지 체크
+        3. 구간 진입 후 60분봉상에서 MSS(Market Structure Shift)가 발생하면 매수 시그널 발생
         """
         signals: List[OrderSignal] = []
         
         if not self._validate_data(bars):
             return signals
         
-        if len(bars) < self.lookback_period:
-            return signals
+        # 현재 bars는 60분봉으로 가정 (실행 엔진에서 전달받은 timeframe)
+        current_price = bars['close'].iloc[-1]
+        current_time = bars.index[-1]
         
-        # 1. Market Structure 분석
-        self._analyze_market_structure(bars)
+        try:
+            # 1. 일봉 데이터 로드 및 FVG/OB 계산
+            daily_bars = self._load_daily_bars(current_time)
+            if daily_bars is not None and len(daily_bars) >= 3:
+                # 일봉에서 FVG 계산
+                daily_bars_with_fvg = calculate_fvg(daily_bars.copy())
+                self.daily_fvgs = self._extract_fvg_levels(daily_bars_with_fvg)
+                
+                # 일봉에서 Order Block 계산
+                daily_bars_with_ob = calculate_order_block(daily_bars.copy())
+                self.daily_obs = self._extract_ob_levels(daily_bars_with_ob)
+                
+                logger.debug(f"Daily levels - FVGs: {len(self.daily_fvgs)}, OBs: {len(self.daily_obs)}")
+            
+            # 2. 60분봉 데이터에서 MSS 계산
+            if len(bars) >= 10:
+                bars_with_mss = calculate_mss(bars.copy(), swing_lookback=5)
+                mss_occurred = self._check_mss_occurred(bars_with_mss)
+            else:
+                mss_occurred = False
+            
+            # 3. 60분봉 현재가가 일봉 OB/FVG 구간에 진입했는지 체크
+            in_fvg_zone = self._check_price_in_fvg_zone(current_price)
+            in_ob_zone = self._check_price_in_ob_zone(current_price)
+            
+            # 4. 구간 진입 후 60분봉 MSS 발생 시 매수 시그널
+            if (in_fvg_zone or in_ob_zone) and mss_occurred:
+                entry_signal = self._generate_entry_signal(bars, positions, account, current_price)
+                if entry_signal:
+                    signals.append(entry_signal)
+                    logger.info(f"🟢 ICT Multi-timeframe Entry: {current_price:,.0f} (FVG: {in_fvg_zone}, OB: {in_ob_zone}, MSS: {mss_occurred})")
+            
+            # 5. 청산 신호 생성
+            exit_signal = self._generate_exit_signal(bars, positions)
+            if exit_signal:
+                signals.append(exit_signal)
         
-        # 2. Liquidity Pool 식별
-        self._identify_liquidity_pools(bars)
-        
-        # 3. Fair Value Gap 감지
-        self._detect_fair_value_gaps(bars)
-        
-        # 4. Order Block 식별
-        self._identify_order_blocks(bars)
-        
-        # 5. 진입 신호 생성
-        entry_signal = self._generate_entry_signal(bars, positions, account)
-        if entry_signal:
-            signals.append(entry_signal)
-        
-        # 6. 청산 신호 생성
-        exit_signal = self._generate_exit_signal(bars, positions)
-        if exit_signal:
-            signals.append(exit_signal)
+        except Exception as e:
+            logger.error(f"Error in ICT strategy on_bar: {e}", exc_info=True)
         
         return signals
     
@@ -286,43 +318,179 @@ class ICTStrategy(BaseStrategy):
         # 최근 5개만 유지
         self.order_blocks = self.order_blocks[-5:]
     
+    def _load_daily_bars(self, current_time: datetime) -> Optional[pd.DataFrame]:
+        """
+        일봉 데이터 로드
+        
+        Args:
+            current_time: 현재 시간
+            
+        Returns:
+            일봉 DataFrame (없으면 None)
+        """
+        try:
+            # 최근 100일 일봉 데이터 로드
+            end_date = current_time
+            start_date = end_date - timedelta(days=100)
+            
+            daily_bars = self.repository.get_ohlc(
+                symbol=self.symbol,
+                interval="1d",
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if daily_bars.empty:
+                return None
+            
+            return daily_bars
+        except Exception as e:
+            logger.error(f"Failed to load daily bars: {e}")
+            return None
+    
+    def _extract_fvg_levels(self, daily_bars: pd.DataFrame) -> List[Dict]:
+        """
+        일봉에서 FVG 구간 추출
+        
+        Args:
+            daily_bars: FVG가 계산된 일봉 DataFrame
+            
+        Returns:
+            FVG 구간 리스트 [{'type': 'bullish'/'bearish', 'top': float, 'bottom': float, 'filled': bool}, ...]
+        """
+        fvgs = []
+        
+        for idx, row in daily_bars.iterrows():
+            if pd.notna(row.get('fvg_type')):
+                fvg = {
+                    'type': row['fvg_type'],
+                    'top': row['fvg_top'],
+                    'bottom': row['fvg_bottom'],
+                    'filled': row.get('fvg_filled', False),
+                    'timestamp': idx
+                }
+                fvgs.append(fvg)
+        
+        # 최근 10개만 유지
+        return fvgs[-10:]
+    
+    def _extract_ob_levels(self, daily_bars: pd.DataFrame) -> List[Dict]:
+        """
+        일봉에서 Order Block 구간 추출
+        
+        Args:
+            daily_bars: OB가 계산된 일봉 DataFrame
+            
+        Returns:
+            OB 구간 리스트 [{'type': 'bullish'/'bearish', 'top': float, 'bottom': float}, ...]
+        """
+        obs = []
+        
+        for idx, row in daily_bars.iterrows():
+            if pd.notna(row.get('order_block_type')):
+                ob = {
+                    'type': row['order_block_type'],
+                    'top': row['order_block_top'],
+                    'bottom': row['order_block_bottom'],
+                    'timestamp': idx
+                }
+                obs.append(ob)
+        
+        # 최근 10개만 유지
+        return obs[-10:]
+    
+    def _check_price_in_fvg_zone(self, current_price: float) -> bool:
+        """
+        60분봉 현재가가 일봉 FVG 구간에 진입했는지 체크
+        
+        Args:
+            current_price: 현재가
+            
+        Returns:
+            FVG 구간 내 진입 여부
+        """
+        for fvg in self.daily_fvgs:
+            if fvg['filled']:
+                continue  # 이미 채워진 FVG는 무시
+            
+            if fvg['type'] == 'bullish':
+                # Bullish FVG: bottom <= price <= top
+                if fvg['bottom'] <= current_price <= fvg['top']:
+                    return True
+            elif fvg['type'] == 'bearish':
+                # Bearish FVG: bottom <= price <= top
+                if fvg['bottom'] <= current_price <= fvg['top']:
+                    return True
+        
+        return False
+    
+    def _check_price_in_ob_zone(self, current_price: float) -> bool:
+        """
+        60분봉 현재가가 일봉 Order Block 구간에 진입했는지 체크
+        
+        Args:
+            current_price: 현재가
+            
+        Returns:
+            OB 구간 내 진입 여부
+        """
+        for ob in self.daily_obs:
+            # OB 구간: bottom <= price <= top
+            if ob['bottom'] <= current_price <= ob['top']:
+                return True
+        
+        return False
+    
+    def _check_mss_occurred(self, bars_with_mss: pd.DataFrame) -> bool:
+        """
+        60분봉에서 MSS(Market Structure Shift) 발생 여부 확인
+        
+        Args:
+            bars_with_mss: MSS가 계산된 60분봉 DataFrame
+            
+        Returns:
+            MSS 발생 여부
+        """
+        # 최근 5개 캔들에서 MSS 발생 확인
+        recent_bars = bars_with_mss.tail(5)
+        
+        for idx, row in recent_bars.iterrows():
+            if pd.notna(row.get('mss_type')):
+                # MSS 발생 (상승 구조 전환 또는 하락 구조 전환)
+                mss_type = row['mss_type']
+                if mss_type == 'bullish':
+                    # 상승 구조 전환: 매수 시그널에 유리
+                    return True
+        
+        return False
+    
     def _generate_entry_signal(
         self, 
         bars: pd.DataFrame, 
         positions: List[Position], 
-        account: Account
+        account: Account,
+        current_price: float
     ) -> Optional[OrderSignal]:
         """
-        ICT 기반 진입 신호 생성
+        ICT 기반 진입 신호 생성 (Multi-timeframe)
         """
         position = self.get_position(self.symbol, positions)
         if position:  # 이미 포지션 보유 중
             return None
         
-        current_price = bars['close'].iloc[-1]
+        # Bullish FVG/OB 구간 진입 + MSS 발생 시 매수
+        bullish_fvg = any(fvg['type'] == 'bullish' and fvg['bottom'] <= current_price <= fvg['top'] 
+                          for fvg in self.daily_fvgs if not fvg['filled'])
+        bullish_ob = any(ob['type'] == 'bullish' and ob['bottom'] <= current_price <= ob['top'] 
+                         for ob in self.daily_obs)
         
-        # 상승 진입 조건
-        if self._check_bullish_entry(bars, current_price):
+        if bullish_fvg or bullish_ob:
             quantity = self._calculate_position_size(account.equity, current_price, "BUY")
             
             if quantity > 0:
-                logger.info(f"🟢 ICT Bullish Entry: {current_price:,.0f}")
                 return OrderSignal(
                     symbol=self.symbol,
                     side=OrderSide.BUY,
-                    quantity=quantity,
-                    order_type=OrderType.MARKET
-                )
-        
-        # 하락 진입 조건 (공매도)
-        elif self._check_bearish_entry(bars, current_price):
-            quantity = self._calculate_position_size(account.equity, current_price, "SELL")
-            
-            if quantity > 0:
-                logger.info(f"🔴 ICT Bearish Entry: {current_price:,.0f}")
-                return OrderSignal(
-                    symbol=self.symbol,
-                    side=OrderSide.SELL,
                     quantity=quantity,
                     order_type=OrderType.MARKET
                 )

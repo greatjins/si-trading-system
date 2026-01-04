@@ -58,7 +58,7 @@ class LSAdapter(BrokerBase):
         self.account_service = LSAccountService(self.client)
         self.order_service = LSOrderService(self.client)
         self.market_service = LSMarketService(self.client)
-        self.realtime_service = None  # TODO: 실시간 서비스 구현
+        self.realtime_service = None  # 지연 초기화 (토큰 필요)
         
         # FileStorage 인스턴스 (캐싱용)
         from data.storage import FileStorage
@@ -342,20 +342,46 @@ class LSAdapter(BrokerBase):
         """
         WebSocket을 통한 실시간 가격 업데이트 스트리밍
         
+        LS증권 WebSocket을 통해 실시간 주식체결(S3_) 데이터를 수신하고,
+        전략 엔진으로 전달할 수 있는 형식으로 변환합니다.
+        
         Args:
             symbols: 구독할 종목 코드 리스트
         
         Yields:
-            실시간 가격 업데이트
+            실시간 가격 업데이트 딕셔너리
+            {
+                'symbol': str,      # 종목코드
+                'price': float,     # 현재가
+                'volume': int,      # 체결량
+                'timestamp': datetime  # 체결시간
+            }
         """
         logger.info(f"Starting realtime stream for {symbols}")
         
-        # Realtime 서비스 초기화
+        # 클라이언트 연결 확인
+        if not self.client.is_connected:
+            await self.client.connect()
+        
+        # 유효한 토큰 획득
+        access_token = await self.client._get_valid_token()
+        
+        # Realtime 서비스 초기화 (토큰 필요)
         if self.realtime_service is None:
             self.realtime_service = LSRealtimeService(
                 api_key=self.api_key,
-                access_token=self.client.access_token
+                access_token=access_token,
+                paper_trading=self.paper_trading
             )
+        else:
+            # 토큰 갱신
+            self.realtime_service.access_token = access_token
         
-        async for data in self.realtime_service.stream(symbols):
-            yield data
+        # 실시간 데이터 스트리밍
+        try:
+            async for data in self.realtime_service.stream(symbols):
+                # 데이터를 전략 엔진으로 전달
+                yield data
+        except Exception as e:
+            logger.error(f"Error in realtime stream: {e}", exc_info=True)
+            raise
