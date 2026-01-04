@@ -75,8 +75,8 @@ class DataRepository:
         로직:
         1. 로컬 캐시(Parquet/DB)에 데이터가 있는지 확인
         2. 데이터가 없거나 부족할 경우, broker/ls/client.py를 사용하여 API 호출
-           - 일봉: TR 't8413'
-           - 60분봉: TR 't8410'
+           - 일봉: TR 't8451' (통합 주식차트 API)
+           - 60분봉: TR 't8452' (통합 주식차트 N분 API)
         3. API로부터 받은 JSON 응답을 시스템 표준 스키마로 변환
         4. 변환된 데이터를 Parquet 파일로 즉시 저장(Caching)한 뒤 DataFrame 반환
         5. LS증권 API의 초당 호출 제한을 고려한 지연 로직 포함
@@ -107,7 +107,7 @@ class DataRepository:
                         logger.debug(f"Loaded {len(cached_data)} records from DB: {symbol}")
                         return cached_data
             
-            # 2. 로컬 캐시 확인: Parquet 파일에서 조회 시도
+            # 2. 로컬 캐시 확인: Parquet 파일(storage)에서 조회 시도
             if cached_data is None or cached_data.empty:
                 cached_data = self.storage.load(symbol, interval)
                 
@@ -124,8 +124,11 @@ class DataRepository:
                             logger.debug(f"Loaded {len(cached_data)} records from file: {symbol}")
                             return cached_data
             
-            # 3. 데이터가 없거나 부족하면 브로커 API 호출
-            logger.info(f"Cache miss or insufficient data for {symbol} ({interval}), fetching from broker API...")
+            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우, 브로커 API 호출
+            if cached_data is None or cached_data.empty:
+                logger.info(f"No data found in DB or file for {symbol} ({interval}), fetching from broker API...")
+            else:
+                logger.info(f"Insufficient data in cache for {symbol} ({interval}), fetching from broker API...")
             
             # 비동기 브로커 API 호출
             ohlc_list = self._fetch_from_ls_api(symbol, interval, start_date, end_date)
@@ -137,7 +140,8 @@ class DataRepository:
                     return cached_data
                 return pd.DataFrame()
             
-            # 4. OHLC 리스트를 DataFrame으로 변환 (표준 스키마)
+            # 4. API로 받은 데이터를 시스템 표준 스키마로 변환
+            # OHLC 리스트를 DataFrame으로 변환 (표준 스키마: timestamp, open, high, low, close, volume)
             data = pd.DataFrame([
                 {
                     'timestamp': ohlc.timestamp,
@@ -165,13 +169,15 @@ class DataRepository:
             if end_date:
                 data = data[data.index <= end_date]
             
-            # 5. Parquet 파일에 즉시 저장 (Caching)
+            # 5. 변환된 데이터를 data/storage.py를 통해 Parquet 파일로 즉시 저장 (Caching)
+            # 반환하기 전에 자동으로 저장하여 다음 조회 시 빠르게 로드 가능
             try:
                 # 비동기 저장을 동기로 래핑
                 self._save_to_parquet(symbol, interval, ohlc_list)
-                logger.info(f"Saved {len(ohlc_list)} OHLC records to Parquet: {symbol}")
+                logger.info(f"Saved {len(ohlc_list)} OHLC records to Parquet: {symbol} ({interval})")
             except Exception as e:
-                logger.warning(f"Failed to save to Parquet: {e}")
+                logger.warning(f"Failed to save to Parquet: {e}", exc_info=True)
+                # 저장 실패해도 데이터는 반환 (다음 조회 시 다시 시도)
             
             # DB에 저장 시도 (선택적)
             if self.use_db and self.ohlc_repo and not data.empty:
@@ -197,8 +203,8 @@ class DataRepository:
         """
         LS증권 API에서 OHLC 데이터 가져오기 (동기 래퍼)
         
-        - 일봉: TR 't8413' 사용
-        - 60분봉: TR 't8410' 사용
+        - 일봉: TR 't8451' 사용 (통합 주식차트 API)
+        - 60분봉: TR 't8452' 사용 (통합 주식차트 N분 API)
         
         Args:
             symbol: 종목 코드
@@ -218,10 +224,10 @@ class DataRepository:
                 async with LSClient() as client:
                     # interval에 따라 TR 코드 결정
                     if interval == "1d":
-                        # 일봉: TR 't8413'
-                        tr_id = "t8413"
-                        tr_in_block = "t8413InBlock"
-                        tr_out_block = "t8413OutBlock1"
+                        # 일봉: TR 't8451' (LS증권 OpenAPI 통합 주식차트 API)
+                        tr_id = "t8451"
+                        tr_in_block = "t8451InBlock"
+                        tr_out_block = "t8451OutBlock1"
                         
                         # 일봉 요청 파라미터
                         request_data = {
@@ -238,10 +244,10 @@ class DataRepository:
                             }
                         }
                     elif interval == "60m":
-                        # 60분봉: TR 't8410'
-                        tr_id = "t8410"
-                        tr_in_block = "t8410InBlock"
-                        tr_out_block = "t8410OutBlock1"
+                        # 60분봉: TR 't8452' (LS증권 OpenAPI 통합 주식차트 N분 API)
+                        tr_id = "t8452"
+                        tr_in_block = "t8452InBlock"
+                        tr_out_block = "t8452OutBlock1"
                         
                         # 60분봉 요청 파라미터
                         # 분봉은 날짜 범위 대신 개수 기반 조회
@@ -268,7 +274,7 @@ class DataRepository:
                         logger.error(f"Unsupported interval: {interval}. Only '1d' and '60m' are supported.")
                         return []
                     
-                    # API 호출
+                    # API 호출 (LSClient 내부에서 이미 1.1초 throttling 적용됨)
                     response = await client.request(
                         method="POST",
                         endpoint="/stock/chart",
@@ -280,9 +286,6 @@ class DataRepository:
                         }
                     )
                     
-                    # 5. LS증권 API 호출 제한 고려 (초당 1건)
-                    await asyncio.sleep(1.1)
-                    
                     # JSON 응답을 표준 스키마로 변환
                     ohlc_list = []
                     items = response.get(tr_out_block, [])
@@ -291,28 +294,53 @@ class DataRepository:
                     
                     for item in items:
                         try:
-                            # 일봉과 60분봉의 필드명이 다를 수 있으므로 처리
+                            # 일봉(t8451)과 분봉(t8452)의 필드명이 다를 수 있으므로 처리
                             if interval == "1d":
-                                # 일봉 필드명 (예상)
+                                # 일봉(t8451) 필드명 파싱
+                                # LS증권 일봉 API는 date, open, high, low, close, jdiff_vol 사용
                                 date_str = item.get("date", "")
+                                if not date_str:
+                                    logger.warning(f"Missing date field in item: {item}")
+                                    continue
+                                
                                 timestamp = datetime.strptime(date_str, "%Y%m%d")
                                 open_price = float(item.get("open", 0))
                                 high_price = float(item.get("high", 0))
                                 low_price = float(item.get("low", 0))
                                 close_price = float(item.get("close", 0))
-                                volume = int(item.get("jdiff_vol", item.get("volume", 0)))
-                            else:  # 60분봉
-                                # 60분봉 필드명 (예상)
+                                # 거래량: jdiff_vol(일일거래량) 사용
+                                volume = int(item.get("jdiff_vol", 0))
+                            
+                            else:  # 분봉(t8452)
+                                # 분봉(t8452) 필드명 파싱
+                                # LS증권 분봉 API는 date, time, open, high, low, close, jdiff_vol 사용
                                 date_str = item.get("date", "")
-                                time_str = item.get("time", "0000")
-                                timestamp = datetime.strptime(f"{date_str}{time_str}", "%Y%m%d%H%M")
+                                time_str = item.get("time", "")
+                                
+                                if not date_str:
+                                    logger.warning(f"Missing date field in item: {item}")
+                                    continue
+                                
+                                # 시간 문자열 처리 (10자리 형식: "0935000000" → "0935")
+                                if len(time_str) >= 4:
+                                    time_hhmm = time_str[:4]  # HHMM만 사용
+                                else:
+                                    time_hhmm = "0000"
+                                
+                                timestamp = datetime.strptime(f"{date_str}{time_hhmm}", "%Y%m%d%H%M")
                                 open_price = float(item.get("open", 0))
                                 high_price = float(item.get("high", 0))
                                 low_price = float(item.get("low", 0))
                                 close_price = float(item.get("close", 0))
-                                volume = int(item.get("jdiff_vol", item.get("volume", 0)))
+                                # 거래량: jdiff_vol(해당봉 거래량) 사용
+                                volume = int(item.get("jdiff_vol", 0))
                             
-                            # 표준 OHLC 객체 생성
+                            # 유효성 검증
+                            if open_price <= 0 or high_price <= 0 or low_price <= 0 or close_price <= 0:
+                                logger.warning(f"Invalid price data in item: {item}")
+                                continue
+                            
+                            # 표준 OHLC 객체 생성 (시스템 표준 스키마)
                             ohlc = OHLC(
                                 symbol=symbol,
                                 timestamp=timestamp,
@@ -323,8 +351,11 @@ class DataRepository:
                                 volume=volume
                             )
                             ohlc_list.append(ohlc)
-                        except Exception as e:
+                        except (ValueError, TypeError, KeyError) as e:
                             logger.warning(f"Failed to parse OHLC item: {e}, item: {item}")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Unexpected error parsing OHLC item: {e}, item: {item}", exc_info=True)
                             continue
                     
                     return ohlc_list

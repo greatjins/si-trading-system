@@ -39,6 +39,8 @@ export const BacktestPage = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
   
   // 전략 파라미터 (포트폴리오 전략용)
   const [parameters, setParameters] = useState<Record<string, any>>({
@@ -159,12 +161,21 @@ export const BacktestPage = () => {
     try {
       const response = await httpClient.post(endpoint, requestData);
       
-      console.log('✅ 백테스트 완료:', response.data);
-      setResult(response.data);
+      console.log('✅ 백테스트 응답:', response.data);
+      
+      // 포트폴리오 백테스트는 비동기 작업 (task_id 반환)
+      if (isPortfolioStrategy && response.data.task_id) {
+        setTaskId(response.data.task_id);
+        // 상태 폴링 시작
+        pollBacktestStatus(response.data.task_id);
+      } else {
+        // 단일 종목 백테스트는 즉시 결과 반환
+        setResult(response.data);
+        setIsRunning(false);
+      }
     } catch (err: any) {
       console.error('❌ 백테스트 실패:', err);
       setError(err.response?.data?.detail || '백테스트 실행 실패');
-    } finally {
       setIsRunning(false);
     }
   };
@@ -175,6 +186,64 @@ export const BacktestPage = () => {
       [key]: value,
     }));
   };
+  
+  // 포트폴리오 백테스트 상태 폴링
+  const pollBacktestStatus = async (taskId: string) => {
+    const poll = async () => {
+      try {
+        const response = await httpClient.get(`${ENDPOINTS.BACKTEST.PORTFOLIO}/${taskId}`);
+        const status = response.data;
+        
+        console.log('📊 백테스트 상태:', status);
+        
+        if (status.status === 'completed' && status.result) {
+          // 완료: 결과 표시
+          setResult(status.result);
+          setIsRunning(false);
+          setTaskId(null);
+          if (pollingInterval) {
+            clearInterval(pollingInterval);
+            setPollingInterval(null);
+          }
+        } else if (status.status === 'failed') {
+          // 실패: 에러 표시
+          setError(status.error || '백테스트 실패');
+          setIsRunning(false);
+          setTaskId(null);
+          if (pollingInterval) {
+            clearInterval(pollingInterval);
+            setPollingInterval(null);
+          }
+        }
+        // running 상태면 계속 폴링
+      } catch (err: any) {
+        console.error('❌ 상태 조회 실패:', err);
+        setError('백테스트 상태 조회 실패');
+        setIsRunning(false);
+        setTaskId(null);
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+      }
+    };
+    
+    // 즉시 한 번 실행
+    await poll();
+    
+    // 2초마다 폴링
+    const interval = setInterval(poll, 2000);
+    setPollingInterval(interval);
+  };
+  
+  // 컴포넌트 언마운트 시 폴링 정리
+  useEffect(() => {
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [pollingInterval]);
   
   
   return (
@@ -388,50 +457,63 @@ export const BacktestPage = () => {
           </div>
         </div>
         
-        {result && (
+        {taskId && isRunning && (
+          <div className="backtest-result-section">
+            <h2 className="mb-4">백테스트 진행 중...</h2>
+            <div className="card text-center" style={{ padding: '40px' }}>
+              <div className="mb-3">
+                <div className="spinner" style={{ margin: '0 auto' }}></div>
+              </div>
+              <p>백테스트가 실행 중입니다. 잠시만 기다려주세요...</p>
+              <p className="text-sm text-secondary mt-2">작업 ID: {taskId}</p>
+            </div>
+          </div>
+        )}
+        
+        {result && result.final_equity !== undefined && (
           <div className="backtest-result-section">
             <h2 className="mb-4">백테스트 결과</h2>
             
             <div className="grid grid-3 mb-4">
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">총 수익률</div>
-                <div className={`text-xl font-weight-bold ${result.total_return >= 0 ? 'metric-positive' : 'metric-negative'}`}>
-                  {(result.total_return * 100).toFixed(2)}%
+                <div className={`text-xl font-weight-bold ${(result.total_return ?? 0) >= 0 ? 'metric-positive' : 'metric-negative'}`}>
+                  {result.total_return !== undefined ? (result.total_return * 100).toFixed(2) : 'N/A'}%
                 </div>
               </div>
               
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">최종 자산</div>
                 <div className="text-xl font-weight-bold">
-                  {result.final_equity.toLocaleString()}원
+                  {result.final_equity !== undefined ? result.final_equity.toLocaleString() : 'N/A'}원
                 </div>
               </div>
               
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">MDD</div>
                 <div className="text-xl font-weight-bold metric-negative">
-                  {(result.mdd * 100).toFixed(2)}%
+                  {result.mdd !== undefined ? (result.mdd * 100).toFixed(2) : 'N/A'}%
                 </div>
               </div>
               
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">샤프 비율</div>
                 <div className="text-xl font-weight-bold">
-                  {result.sharpe_ratio.toFixed(2)}
+                  {result.sharpe_ratio !== undefined ? result.sharpe_ratio.toFixed(2) : 'N/A'}
                 </div>
               </div>
               
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">승률</div>
                 <div className="text-xl font-weight-bold">
-                  {(result.win_rate * 100).toFixed(1)}%
+                  {result.win_rate !== undefined ? (result.win_rate * 100).toFixed(1) : 'N/A'}%
                 </div>
               </div>
               
               <div className="card text-center">
                 <div className="text-sm text-secondary mb-1">총 거래 수</div>
                 <div className="text-xl font-weight-bold">
-                  {result.total_trades}회 ({Math.floor(result.total_trades / 2)}쌍)
+                  {result.total_trades !== undefined ? `${result.total_trades}회 (${Math.floor(result.total_trades / 2)}쌍)` : 'N/A'}
                 </div>
               </div>
             </div>
@@ -444,10 +526,12 @@ export const BacktestPage = () => {
                     <td>전략</td>
                     <td>{result.strategy_name}</td>
                   </tr>
-                  <tr>
-                    <td>종목</td>
-                    <td>{result.symbol}</td>
-                  </tr>
+                  {result.symbol && (
+                    <tr>
+                      <td>종목</td>
+                      <td>{result.symbol}</td>
+                    </tr>
+                  )}
                   <tr>
                     <td>백테스트 ID</td>
                     <td>{result.backtest_id}</td>
