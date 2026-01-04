@@ -16,14 +16,67 @@ router = APIRouter()
 
 
 # 스키마
+
+class LogicalNode(BaseModel):
+    """
+    논리 트리 노드 - 지표 간 연산을 표현
+    
+    예: MA20 > MA60
+    {
+        "operator": ">",
+        "left": {"type": "indicator", "name": "MA", "params": {"period": 20}},
+        "right": {"type": "indicator", "name": "MA", "params": {"period": 60}}
+    }
+    
+    예: (RSI < 30) AND (Volume > Volume_MA)
+    {
+        "operator": "AND",
+        "left": {
+            "operator": "<",
+            "left": {"type": "indicator", "name": "RSI", "params": {"period": 14}},
+            "right": 30
+        },
+        "right": {
+            "operator": ">",
+            "left": {"type": "indicator", "name": "Volume"},
+            "right": {"type": "indicator", "name": "Volume_MA", "params": {"period": 20}}
+        }
+    }
+    """
+    operator: str  # ">", "<", ">=", "<=", "==", "AND", "OR", "NOT"
+    left: Any  # LogicalNode, Condition, 또는 값 (int, float, str, dict)
+    right: Optional[Any] = None  # AND/OR가 아닌 경우만 사용
+
+
+class IndicatorConfig(BaseModel):
+    """
+    지표 설정 - ICT 지표별 옵션 포함
+    """
+    type: str  # "technical" | "ict"
+    name: str  # "rsi" | "ma" | "fvg" | "liquidity" | "order_block" | "mss" | "bos"
+    parameters: Dict[str, Any] = {}  # 지표 파라미터
+    
+    # ICT 지표 전용 옵션
+    timeframe: Optional[str] = None  # "1m" | "5m" | "15m" | "1h" | "1d" (ICT 지표용)
+    sensitivity: Optional[float] = None  # 민감도 (0.0 ~ 1.0, ICT 지표용)
+    enabled: Optional[bool] = True  # 지표 활성화 여부
+
+
 class Condition(BaseModel):
-    """조건"""
+    """
+    조건 - 단순 조건 또는 논리 트리
+    """
     id: str
-    type: str  # indicator, price, volume
+    type: str  # "simple" | "logical" | "indicator" | "price" | "volume" | "ict"
+    
+    # 단순 조건 (type="simple" 또는 "indicator"/"price"/"volume")
     indicator: Optional[str] = None
-    operator: str
-    value: Any
+    operator: Optional[str] = None  # ">", "<", ">=", "<=", "==", "in_gap", "in_zone", "in_block"
+    value: Optional[Any] = None
     period: Optional[int] = None
+    
+    # 논리 트리 조건 (type="logical")
+    logical_tree: Optional[LogicalNode] = None
 
 
 class StockSelection(BaseModel):
@@ -134,8 +187,46 @@ class EntryStrategy(BaseModel):
     minInterval: Optional[int] = None  # 일
 
 
+class StrategyConfigRequest(BaseModel):
+    """
+    전략 설정 요청 - config_json 구조화된 데이터
+    
+    UI에서 전달받은 설정을 검증하고 config_json으로 저장
+    """
+    strategy_id: Optional[int] = None  # 수정 시 전략 ID
+    name: str
+    description: Optional[str] = ""
+    
+    # 지표 설정
+    indicators: List[IndicatorConfig] = []
+    
+    # 조건 설정 (논리 트리 지원)
+    conditions: Dict[str, List[Condition]] = {
+        "buy": [],
+        "sell": []
+    }
+    
+    # ICT 전용 설정
+    ict_config: Optional[Dict[str, Any]] = None
+    
+    # 전략 파라미터
+    parameters: Optional[Dict[str, Any]] = None
+    
+    # 종목 선정 (포트폴리오 전략용)
+    stock_selection: Optional[StockSelection] = None
+    
+    # 진입 전략
+    entry_strategy: Optional[EntryStrategy] = None
+    
+    # 포지션 관리
+    position_management: Optional[PositionManagement] = None
+    
+    # 리스크 관리
+    risk_management: Optional[Dict[str, Any]] = None
+
+
 class StrategyBuilderRequest(BaseModel):
-    """전략 빌더 요청"""
+    """전략 빌더 요청 (기존 호환성 유지)"""
     strategy_id: int = None  # 수정 시 전략 ID
     name: str
     description: str
@@ -153,7 +244,8 @@ class StrategyBuilderResponse(BaseModel):
     name: str
     description: str
     created_at: datetime
-    python_code: str = None
+    python_code: Optional[str] = None
+    config_json: Optional[Dict[str, Any]] = None  # 구조화된 설정 (save-config 엔드포인트용)
 
 
 @router.post("/save", response_model=StrategyBuilderResponse)
@@ -231,6 +323,236 @@ async def save_strategy(
         db.rollback()
         logger.error(f"Failed to save strategy: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/save-config", response_model=StrategyBuilderResponse)
+async def save_strategy_config(
+    request: StrategyConfigRequest,
+    current_user: dict = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    전략 설정 저장 (config_json 기반)
+    
+    UI에서 전달받은 설정을 검증하고 config_json으로 저장합니다.
+    Python 코드를 생성하지 않고, DynamicStrategy가 실행 시점에 config_json을 로드하여 동작합니다.
+    
+    Args:
+        request: 전략 설정 요청
+        current_user: 현재 사용자
+        db: DB 세션
+        
+    Returns:
+        저장된 전략 정보
+    """
+    try:
+        from data.models import StrategyBuilderModel
+        
+        # 설정 검증
+        validation_errors = _validate_strategy_config(request)
+        if validation_errors:
+            raise HTTPException(
+                status_code=400,
+                detail=f"전략 설정 검증 실패: {', '.join(validation_errors)}"
+            )
+        
+        # config_json 구성
+        config_json = {
+            "indicators": [ind.dict() for ind in request.indicators],
+            "conditions": {
+                "buy": [cond.dict() for cond in request.conditions.get("buy", [])],
+                "sell": [cond.dict() for cond in request.conditions.get("sell", [])]
+            }
+        }
+        
+        if request.ict_config:
+            config_json["ict_config"] = request.ict_config
+        
+        if request.parameters:
+            config_json["parameters"] = request.parameters
+        
+        if request.stock_selection:
+            config_json["stock_selection"] = request.stock_selection.dict()
+        
+        if request.entry_strategy:
+            config_json["entry_strategy"] = request.entry_strategy.dict()
+        
+        if request.position_management:
+            config_json["position_management"] = request.position_management.dict()
+        
+        if request.risk_management:
+            config_json["risk_management"] = request.risk_management
+        
+        # 기존 config 필드 (호환성 유지)
+        config_dict = {
+            "name": request.name,
+            "description": request.description,
+            "is_portfolio": request.stock_selection is not None,
+            "stockSelection": request.stock_selection.dict() if request.stock_selection else {},
+            "buyConditions": [cond.dict() for cond in request.conditions.get("buy", [])],
+            "sellConditions": [cond.dict() for cond in request.conditions.get("sell", [])],
+            "entryStrategy": request.entry_strategy.dict() if request.entry_strategy else {},
+            "positionManagement": request.position_management.dict() if request.position_management else {}
+        }
+        
+        # 수정 모드인지 확인
+        if request.strategy_id:
+            # 기존 전략 업데이트
+            strategy = db.query(StrategyBuilderModel).filter(
+                StrategyBuilderModel.id == request.strategy_id,
+                StrategyBuilderModel.user_id == current_user["user_id"]
+            ).first()
+            
+            if not strategy:
+                raise HTTPException(status_code=404, detail="Strategy not found")
+            
+            strategy.name = request.name
+            strategy.description = request.description
+            strategy.config = config_dict
+            strategy.config_json = config_json  # 구조화된 설정 저장
+            strategy.updated_at = datetime.now()
+            
+            logger.info(f"Strategy config updated: ID={strategy.id}, Name={request.name}, User={current_user['username']}")
+        else:
+            # 새 전략 생성
+            strategy = StrategyBuilderModel(
+                user_id=current_user["user_id"],
+                name=request.name,
+                description=request.description,
+                config=config_dict,
+                config_json=config_json,  # 구조화된 설정 저장
+                is_active=True
+            )
+            
+            db.add(strategy)
+            logger.info(f"Strategy config created: Name={request.name}, User={current_user['username']}")
+        
+        db.commit()
+        db.refresh(strategy)
+        
+        return StrategyBuilderResponse(
+            strategy_id=strategy.id,
+            name=strategy.name,
+            description=strategy.description,
+            created_at=strategy.created_at,
+            python_code=None,  # DynamicStrategy는 python_code 불필요
+            config_json=config_json
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to save strategy config: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _validate_strategy_config(request: StrategyConfigRequest) -> List[str]:
+    """
+    전략 설정 검증
+    
+    Args:
+        request: 전략 설정 요청
+    
+    Returns:
+        검증 오류 리스트 (빈 리스트면 검증 통과)
+    """
+    errors = []
+    
+    # 필수 필드 확인
+    if not request.name or not request.name.strip():
+        errors.append("전략 이름은 필수입니다")
+    
+    # 지표 검증
+    for idx, indicator in enumerate(request.indicators):
+        if not indicator.name:
+            errors.append(f"지표 {idx+1}: 이름이 필요합니다")
+        
+        if indicator.type not in ["technical", "ict"]:
+            errors.append(f"지표 {idx+1}: 타입은 'technical' 또는 'ict'여야 합니다")
+        
+        # ICT 지표 타임프레임 검증
+        if indicator.type == "ict" and indicator.timeframe:
+            valid_timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+            if indicator.timeframe not in valid_timeframes:
+                errors.append(f"지표 {idx+1}: 타임프레임은 {valid_timeframes} 중 하나여야 합니다")
+        
+        # 민감도 검증
+        if indicator.sensitivity is not None:
+            if not (0.0 <= indicator.sensitivity <= 1.0):
+                errors.append(f"지표 {idx+1}: 민감도는 0.0 ~ 1.0 사이여야 합니다")
+    
+    # 조건 검증
+    buy_conditions = request.conditions.get("buy", [])
+    sell_conditions = request.conditions.get("sell", [])
+    
+    if not buy_conditions and not sell_conditions:
+        errors.append("매수 또는 매도 조건이 최소 하나는 필요합니다")
+    
+    for idx, condition in enumerate(buy_conditions + sell_conditions):
+        if not condition.id:
+            errors.append(f"조건 {idx+1}: ID가 필요합니다")
+        
+        # 논리 트리 조건 검증
+        if condition.type == "logical":
+            if not condition.logical_tree:
+                errors.append(f"조건 {condition.id}: 논리 트리가 필요합니다")
+            else:
+                errors.extend(_validate_logical_tree(condition.logical_tree, condition.id))
+        
+        # 단순 조건 검증
+        elif condition.type in ["indicator", "price", "volume", "ict"]:
+            if not condition.operator:
+                errors.append(f"조건 {condition.id}: 연산자가 필요합니다")
+    
+    return errors
+
+
+def _validate_logical_tree(node: LogicalNode, context: str = "") -> List[str]:
+    """
+    논리 트리 검증
+    
+    Args:
+        node: 논리 트리 노드
+        context: 검증 컨텍스트 (디버깅용)
+    
+    Returns:
+        검증 오류 리스트
+    """
+    errors = []
+    
+    if not node.operator:
+        errors.append(f"{context}: 연산자가 필요합니다")
+        return errors
+    
+    valid_operators = [">", "<", ">=", "<=", "==", "AND", "OR", "NOT"]
+    if node.operator not in valid_operators:
+        errors.append(f"{context}: 지원하지 않는 연산자 '{node.operator}'")
+    
+    # 단항 연산자 (NOT)
+    if node.operator == "NOT":
+        if node.left is None:
+            errors.append(f"{context}: NOT 연산자는 left 피연산자가 필요합니다")
+        else:
+            if isinstance(node.left, dict) and "operator" in node.left:
+                # 중첩된 논리 노드
+                errors.extend(_validate_logical_tree(LogicalNode(**node.left), f"{context}.left"))
+    else:
+        # 이항 연산자
+        if node.left is None:
+            errors.append(f"{context}: left 피연산자가 필요합니다")
+        
+        if node.right is None and node.operator not in ["NOT"]:
+            errors.append(f"{context}: right 피연산자가 필요합니다")
+        
+        # 중첩된 논리 노드 재귀 검증
+        if isinstance(node.left, dict) and "operator" in node.left:
+            errors.extend(_validate_logical_tree(LogicalNode(**node.left), f"{context}.left"))
+        
+        if isinstance(node.right, dict) and "operator" in node.right:
+            errors.extend(_validate_logical_tree(LogicalNode(**node.right), f"{context}.right"))
+    
+    return errors
 
 
 @router.get("/indicators")
@@ -393,19 +715,54 @@ async def get_available_indicators():
             "id": "bos",
             "name": "BOS (Break of Structure)",
             "category": "ict",
+            "type": "ict",
             "parameters": [
-                {"name": "lookback", "type": "number", "default": 20, "min": 5, "max": 100}
+                {"name": "swing_lookback", "type": "number", "default": 5, "min": 3, "max": 20}
             ],
-            "operators": [">", "<", "break_high", "break_low"],
+            "ict_options": {
+                "timeframe": {
+                    "type": "select",
+                    "options": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    "default": "1d",
+                    "description": "BOS 탐지 타임프레임"
+                },
+                "sensitivity": {
+                    "type": "slider",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.5,
+                    "step": 0.1,
+                    "description": "민감도 (높을수록 더 많은 BOS 탐지)"
+                }
+            },
+            "operators": ["break_high", "break_low", "structure_shift"],
             "description": "ICT 구조적 돌파 - 이전 고점/저점 돌파"
         },
         {
             "id": "fvg",
             "name": "Fair Value Gap",
             "category": "ict",
+            "type": "ict",
             "parameters": [
-                {"name": "min_gap", "type": "number", "default": 0.002, "min": 0.001, "max": 0.01, "step": 0.001}
+                {"name": "min_gap_size", "type": "number", "default": 0.002, "min": 0.001, "max": 0.01, "step": 0.001},
+                {"name": "check_filled", "type": "boolean", "default": True}
             ],
+            "ict_options": {
+                "timeframe": {
+                    "type": "select",
+                    "options": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    "default": "1h",
+                    "description": "FVG 탐지 타임프레임"
+                },
+                "sensitivity": {
+                    "type": "slider",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.3,
+                    "step": 0.1,
+                    "description": "민감도 (높을수록 더 작은 갭도 탐지)"
+                }
+            },
             "operators": ["in_gap", "above_gap", "below_gap"],
             "description": "ICT 공정가치 갭 - 가격 공백 구간"
         },
@@ -413,21 +770,85 @@ async def get_available_indicators():
             "id": "order_block",
             "name": "Order Block",
             "category": "ict",
+            "type": "ict",
             "parameters": [
+                {"name": "lookback", "type": "number", "default": 20, "min": 5, "max": 100},
                 {"name": "volume_multiplier", "type": "number", "default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}
             ],
+            "ict_options": {
+                "timeframe": {
+                    "type": "select",
+                    "options": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    "default": "1h",
+                    "description": "Order Block 탐지 타임프레임"
+                },
+                "sensitivity": {
+                    "type": "slider",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.5,
+                    "step": 0.1,
+                    "description": "민감도 (높을수록 더 많은 Order Block 탐지)"
+                }
+            },
             "operators": ["in_block", "above_block", "below_block"],
             "description": "ICT 주문 블록 - 기관 주문 집중 구간"
         },
         {
-            "id": "liquidity_pool",
-            "name": "Liquidity Pool",
+            "id": "liquidity",
+            "name": "Liquidity Zones",
             "category": "ict",
+            "type": "ict",
             "parameters": [
-                {"name": "cluster_threshold", "type": "number", "default": 0.015, "min": 0.005, "max": 0.05, "step": 0.005}
+                {"name": "period", "type": "number", "default": 20, "min": 5, "max": 100},
+                {"name": "tolerance", "type": "number", "default": 0.001, "min": 0.0001, "max": 0.01, "step": 0.0001},
+                {"name": "min_touches", "type": "number", "default": 2, "min": 1, "max": 10}
             ],
-            "operators": ["near_pool", "sweep_pool"],
-            "description": "ICT 유동성 풀 - 고점/저점 클러스터"
+            "ict_options": {
+                "timeframe": {
+                    "type": "select",
+                    "options": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    "default": "1d",
+                    "description": "Liquidity Zone 탐지 타임프레임"
+                },
+                "sensitivity": {
+                    "type": "slider",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.4,
+                    "step": 0.1,
+                    "description": "민감도 (높을수록 더 많은 유동성 구간 탐지)"
+                }
+            },
+            "operators": ["in_zone", "near_zone", "break_zone"],
+            "description": "ICT 유동성 구간 - 지지/저항 레벨"
+        },
+        {
+            "id": "mss",
+            "name": "Market Structure Shift",
+            "category": "ict",
+            "type": "ict",
+            "parameters": [
+                {"name": "swing_lookback", "type": "number", "default": 5, "min": 3, "max": 20}
+            ],
+            "ict_options": {
+                "timeframe": {
+                    "type": "select",
+                    "options": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
+                    "default": "1d",
+                    "description": "MSS 탐지 타임프레임"
+                },
+                "sensitivity": {
+                    "type": "slider",
+                    "min": 0.0,
+                    "max": 1.0,
+                    "default": 0.5,
+                    "step": 0.1,
+                    "description": "민감도 (높을수록 더 많은 MSS 탐지)"
+                }
+            },
+            "operators": ["structure_shift", "bullish_shift", "bearish_shift"],
+            "description": "ICT 시장 구조 변화 - 상승/하락 구조 전환"
         },
         {
             "id": "smart_money",

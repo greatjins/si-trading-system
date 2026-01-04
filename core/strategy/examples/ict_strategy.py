@@ -112,12 +112,12 @@ class ICTStrategy(BaseStrategy):
         account: Account
     ) -> List[OrderSignal]:
         """
-        ICT 분석 및 신호 생성 (Multi-timeframe)
+        ICT 분석 및 신호 생성 (Multi-timeframe 강화)
         
         로직:
-        1. 일봉(1d) 데이터에서 FVG와 OB 구간을 먼저 계산
-        2. 60분봉 데이터의 현재가가 일봉에서 계산된 OB/FVG 구간에 진입했는지 체크
-        3. 구간 진입 후 60분봉상에서 MSS(Market Structure Shift)가 발생하면 매수 시그널 발생
+        1. 일봉(1d) 데이터를 DataRepository를 통해 별도로 로드하여 'Daily OB/FVG' 구간을 먼저 계산
+        2. 현재 들어오는 60분봉 가격이 이 'Daily 구간'에 도달했는지 확인
+        3. Daily 구간에 도달했을 때만 MSS(Market Structure Shift)를 확인하여 진입 시그널 생성
         """
         signals: List[OrderSignal] = []
         
@@ -129,38 +129,60 @@ class ICTStrategy(BaseStrategy):
         current_time = bars.index[-1]
         
         try:
-            # 1. 일봉 데이터 로드 및 FVG/OB 계산
+            # ===== 1단계: 일봉 데이터 로드 및 Daily OB/FVG 구간 계산 =====
             daily_bars = self._load_daily_bars(current_time)
-            if daily_bars is not None and len(daily_bars) >= 3:
-                # 일봉에서 FVG 계산
-                daily_bars_with_fvg = calculate_fvg(daily_bars.copy())
-                self.daily_fvgs = self._extract_fvg_levels(daily_bars_with_fvg)
-                
-                # 일봉에서 Order Block 계산
-                daily_bars_with_ob = calculate_order_block(daily_bars.copy())
-                self.daily_obs = self._extract_ob_levels(daily_bars_with_ob)
-                
-                logger.debug(f"Daily levels - FVGs: {len(self.daily_fvgs)}, OBs: {len(self.daily_obs)}")
+            if daily_bars is None or len(daily_bars) < 3:
+                logger.warning(f"Daily bars insufficient for {self.symbol}: {len(daily_bars) if daily_bars is not None else 0} bars")
+                # Daily 데이터가 없으면 청산 신호만 처리
+                exit_signal = self._generate_exit_signal(bars, positions)
+                if exit_signal:
+                    signals.append(exit_signal)
+                return signals
             
-            # 2. 60분봉 데이터에서 MSS 계산
+            # 일봉에서 FVG 계산
+            daily_bars_with_fvg = calculate_fvg(daily_bars.copy())
+            self.daily_fvgs = self._extract_fvg_levels(daily_bars_with_fvg)
+            
+            # 일봉에서 Order Block 계산
+            daily_bars_with_ob = calculate_order_block(daily_bars.copy())
+            self.daily_obs = self._extract_ob_levels(daily_bars_with_ob)
+            
+            logger.debug(f"Daily levels calculated - FVGs: {len(self.daily_fvgs)}, OBs: {len(self.daily_obs)}")
+            
+            # ===== 2단계: 60분봉 현재가가 Daily OB/FVG 구간에 도달했는지 확인 =====
+            in_fvg_zone = self._check_price_in_fvg_zone(current_price)
+            in_ob_zone = self._check_price_in_ob_zone(current_price)
+            in_daily_zone = in_fvg_zone or in_ob_zone
+            
+            if not in_daily_zone:
+                # Daily 구간에 도달하지 않았으면 MSS 확인하지 않고 청산 신호만 처리
+                logger.debug(f"Price {current_price:,.0f} not in Daily zone - skipping MSS check")
+                exit_signal = self._generate_exit_signal(bars, positions)
+                if exit_signal:
+                    signals.append(exit_signal)
+                return signals
+            
+            # ===== 3단계: Daily 구간에 도달했을 때만 MSS 확인 =====
+            logger.info(f"Price {current_price:,.0f} entered Daily zone (FVG: {in_fvg_zone}, OB: {in_ob_zone}) - checking MSS...")
+            
+            mss_occurred = False
             if len(bars) >= 10:
+                # 60분봉 데이터에서 MSS 계산
                 bars_with_mss = calculate_mss(bars.copy(), swing_lookback=5)
                 mss_occurred = self._check_mss_occurred(bars_with_mss)
             else:
-                mss_occurred = False
+                logger.warning(f"Insufficient 60m bars for MSS analysis: {len(bars)} bars")
             
-            # 3. 60분봉 현재가가 일봉 OB/FVG 구간에 진입했는지 체크
-            in_fvg_zone = self._check_price_in_fvg_zone(current_price)
-            in_ob_zone = self._check_price_in_ob_zone(current_price)
-            
-            # 4. 구간 진입 후 60분봉 MSS 발생 시 매수 시그널
-            if (in_fvg_zone or in_ob_zone) and mss_occurred:
+            # ===== 4단계: Daily 구간 진입 + MSS 발생 시 진입 시그널 생성 =====
+            if mss_occurred:
                 entry_signal = self._generate_entry_signal(bars, positions, account, current_price)
                 if entry_signal:
                     signals.append(entry_signal)
-                    logger.info(f"🟢 ICT Multi-timeframe Entry: {current_price:,.0f} (FVG: {in_fvg_zone}, OB: {in_ob_zone}, MSS: {mss_occurred})")
+                    logger.info(f"🟢 ICT Multi-timeframe Entry Signal: {current_price:,.0f} (Daily Zone: ✓, MSS: ✓)")
+            else:
+                logger.debug(f"MSS not occurred yet - waiting for structure shift")
             
-            # 5. 청산 신호 생성
+            # ===== 5단계: 청산 신호 생성 =====
             exit_signal = self._generate_exit_signal(bars, positions)
             if exit_signal:
                 signals.append(exit_signal)
@@ -320,19 +342,27 @@ class ICTStrategy(BaseStrategy):
     
     def _load_daily_bars(self, current_time: datetime) -> Optional[pd.DataFrame]:
         """
-        일봉 데이터 로드
+        일봉(1d) 데이터를 DataRepository를 통해 별도로 로드
         
         Args:
-            current_time: 현재 시간
+            current_time: 현재 시간 (60분봉의 타임스탬프)
             
         Returns:
             일봉 DataFrame (없으면 None)
+            
+        Note:
+            - DataRepository는 로컬 캐시(DB/Parquet) 우선 조회
+            - 캐시에 없으면 자동으로 브로커 API 호출하여 데이터 수집
         """
         try:
-            # 최근 100일 일봉 데이터 로드
+            # 최근 100일 일봉 데이터 로드 (충분한 기간 확보)
             end_date = current_time
             start_date = end_date - timedelta(days=100)
             
+            logger.debug(f"Loading daily bars for {self.symbol} from {start_date.date()} to {end_date.date()}")
+            
+            # DataRepository를 통해 일봉 데이터 로드
+            # - DB 우선 조회, 없으면 Parquet 파일, 없으면 브로커 API 호출
             daily_bars = self.repository.get_ohlc(
                 symbol=self.symbol,
                 interval="1d",
@@ -341,11 +371,14 @@ class ICTStrategy(BaseStrategy):
             )
             
             if daily_bars.empty:
+                logger.warning(f"No daily bars found for {self.symbol}")
                 return None
             
+            logger.debug(f"Loaded {len(daily_bars)} daily bars for {self.symbol}")
             return daily_bars
+            
         except Exception as e:
-            logger.error(f"Failed to load daily bars: {e}")
+            logger.error(f"Failed to load daily bars for {self.symbol}: {e}", exc_info=True)
             return None
     
     def _extract_fvg_levels(self, daily_bars: pd.DataFrame) -> List[Dict]:

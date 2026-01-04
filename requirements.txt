@@ -20,12 +20,13 @@ alembic==1.13.0  # Database migrations
 pandas==2.1.3
 numpy==1.26.2
 
-# WebSocket
-websockets==12.0
+# WebSocket (LS증권 실시간 데이터 연동용)
+websockets>=12.0  # 최신 버전: 15.0.1
 
 # HTTP Client
 httpx==0.25.2
 requests==2.31.0
+tenacity==8.2.3  # Retry with exponential backoff
 
 # Utilities
 pyyaml==6.0.1

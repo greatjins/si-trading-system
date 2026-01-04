@@ -242,5 +242,74 @@ class BaseStrategy(ABC):
         # 우선순위 2: select_universe가 오버라이드되었는지 확인
         return self.__class__.select_universe != BaseStrategy.select_universe
     
+    def apply_indicators(self, df: pd.DataFrame, config_json: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """
+        DB의 config_json을 읽어 지표를 계산하여 DataFrame에 추가
+        
+        Args:
+            df: OHLC DataFrame (columns: open, high, low, close, volume)
+            config_json: 전략 설정 JSON (None이면 self.params에서 'config_json' 키로 찾음)
+        
+        Returns:
+            지표가 추가된 DataFrame
+        
+        Note:
+            - config_json이 None이면 self.params.get('config_json')을 사용
+            - config_json.indicators 리스트를 calculate_custom_indicators에 전달
+            - ICT 지표도 포함하여 통합 계산
+        """
+        # config_json 가져오기
+        if config_json is None:
+            config_json = self.params.get('config_json')
+        
+        if not config_json:
+            logger.debug("No config_json found, skipping indicator calculation")
+            return df
+        
+        # indicators 리스트 추출
+        indicators = config_json.get('indicators', [])
+        
+        if not indicators:
+            logger.debug("No indicators in config_json, skipping indicator calculation")
+            return df
+        
+        # calculate_custom_indicators 호출
+        try:
+            from utils.indicators import calculate_custom_indicators
+            
+            # indicators를 calculate_custom_indicators 형식으로 변환
+            # config_json.indicators는 [{type, name, parameters, timeframe, sensitivity}] 형식
+            # calculate_custom_indicators는 [{name, params}] 형식
+            indicator_config_list = []
+            for indicator in indicators:
+                if isinstance(indicator, dict):
+                    # 기본 파라미터 추출
+                    params = indicator.get('parameters', {}).copy()
+                    
+                    # ICT 지표의 경우 timeframe과 sensitivity를 params에 추가
+                    # (현재 calculate_custom_indicators는 이를 직접 사용하지 않지만,
+                    #  향후 확장을 위해 params에 포함)
+                    if indicator.get('type') == 'ict':
+                        if indicator.get('timeframe'):
+                            params['timeframe'] = indicator.get('timeframe')
+                        if indicator.get('sensitivity') is not None:
+                            params['sensitivity'] = indicator.get('sensitivity')
+                    
+                    indicator_config = {
+                        'name': indicator.get('name', ''),
+                        'params': params
+                    }
+                    indicator_config_list.append(indicator_config)
+            
+            if indicator_config_list:
+                df = calculate_custom_indicators(df, indicator_config_list)
+                logger.debug(f"Applied {len(indicator_config_list)} indicators to DataFrame")
+            
+        except Exception as e:
+            logger.error(f"Failed to apply indicators: {e}", exc_info=True)
+            # 오류가 발생해도 원본 DataFrame 반환 (전략 실행 계속)
+        
+        return df
+    
     def __repr__(self) -> str:
         return f"{self.name}({self.params})"

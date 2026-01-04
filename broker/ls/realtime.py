@@ -4,7 +4,7 @@ LS증권 WebSocket 실시간 데이터
 import asyncio
 import json
 from typing import List, Dict, Any, AsyncIterator, Optional
-import websockets
+import websockets  # type: ignore
 from datetime import datetime, time
 
 from utils.logger import setup_logger
@@ -40,18 +40,24 @@ class LSRealtimeService:
         logger.info(f"LSRealtimeService initialized (URL: {self.ws_url})")
     
     async def connect(self) -> None:
-        """WebSocket 연결"""
+        """
+        WebSocket 연결
+        
+        'wss://openapi.ls-sec.co.kr:9443/websocket' 주소에 연결하고
+        OAuth 토큰 인증 헤더를 포함합니다.
+        """
         try:
+            # WebSocket URL 사용 (실거래: 9443, 모의투자: 29443)
+            # self.ws_url은 __init__에서 LSEndpoints.get_wss_url()로 설정됨
             logger.info(f"Connecting to WebSocket: {self.ws_url}")
             
             # websockets 라이브러리를 사용하여 WSS 연결
+            # OAuth 토큰 인증 헤더 포함
             self.websocket = await websockets.connect(
                 self.ws_url,
                 extra_headers={
-                    "authorization": f"Bearer {self.access_token}",
+                    "authorization": f"Bearer {self.access_token}",  # OAuth 토큰 인증 헤더
                     "appkey": self.api_key,
-                    "appsecretkey": "",  # WebSocket은 appkey만 필요
-                    "tr_cd": "",  # 구독 시 설정
                     "custtype": "P"  # 개인투자자
                 },
                 ping_interval=20,  # 20초마다 ping 전송 (연결 유지)
@@ -84,6 +90,8 @@ class LSRealtimeService:
         """
         실시간 주식체결(S3_) 데이터 구독
         
+        실시간 체결가 TR인 'S3_'를 사용하여 종목 구독 메시지를 전송합니다.
+        
         Args:
             symbols: 구독할 종목 코드 리스트
         """
@@ -92,33 +100,35 @@ class LSRealtimeService:
         
         logger.info(f"Subscribing to symbols: {symbols} (TR: S3_)")
         
-        # LS증권 실시간 주식체결 구독 메시지 전송
+        # LS증권 실시간 주식체결(S3_) 구독 메시지 전송
         for symbol in symbols:
             try:
+                # LS증권 WebSocket 구독 메시지 형식
                 subscribe_msg = {
                     "header": {
-                        "approval_key": self.access_token,
+                        "approval_key": self.access_token,  # OAuth 토큰
                         "custtype": "P",  # 개인투자자
                         "tr_type": "1",   # 실시간 데이터
                         "content-type": "utf-8"
                     },
                     "body": {
                         "input": {
-                            "tr_id": "S3_",  # 실시간 주식체결
-                            "tr_key": symbol  # 종목코드
+                            "tr_id": "S3_",  # 실시간 주식체결 TR 코드
+                            "tr_key": symbol  # 종목코드 (예: "005930")
                         }
                     }
                 }
                 
+                # JSON 메시지를 문자열로 변환하여 전송
                 message = json.dumps(subscribe_msg, ensure_ascii=False)
                 await self.websocket.send(message)
-                logger.debug(f"Subscribed to {symbol}")
+                logger.debug(f"Subscribed to {symbol} (S3_)")
                 
                 # 구독 메시지 간 짧은 지연 (API 제한 고려)
                 await asyncio.sleep(0.1)
             
             except Exception as e:
-                logger.error(f"Failed to subscribe to {symbol}: {e}")
+                logger.error(f"Failed to subscribe to {symbol}: {e}", exc_info=True)
                 continue
         
         logger.info(f"Subscribed to {len(symbols)} symbols")
@@ -126,6 +136,9 @@ class LSRealtimeService:
     async def stream(self, symbols: List[str]) -> AsyncIterator[Dict[str, Any]]:
         """
         실시간 데이터 스트리밍
+        
+        실제 수신된 바이너리/JSON 데이터를 파싱해서 
+        {'symbol', 'price', 'volume', 'timestamp'} 형태의 딕셔너리를 yield 합니다.
         
         Args:
             symbols: 구독할 종목 코드 리스트
@@ -141,13 +154,27 @@ class LSRealtimeService:
             while self.is_connected and self.websocket:
                 try:
                     # 메시지 수신 (타임아웃: 30초)
+                    # 바이너리 또는 텍스트(JSON) 데이터 모두 처리 가능
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
                         timeout=30.0
                     )
                     
-                    # JSON 파싱
-                    data = json.loads(message)
+                    # 바이너리 데이터인 경우 텍스트로 디코딩 시도
+                    if isinstance(message, bytes):
+                        try:
+                            message = message.decode('utf-8')
+                        except UnicodeDecodeError:
+                            logger.warning(f"Failed to decode binary message: {message[:50]}")
+                            continue
+                    
+                    # JSON 파싱 시도
+                    try:
+                        data = json.loads(message)
+                    except json.JSONDecodeError:
+                        # JSON이 아닌 경우, 다른 형식일 수 있으므로 로깅 후 건너뜀
+                        logger.debug(f"Received non-JSON message: {message[:100]}")
+                        continue
                     
                     # 메시지 파싱 및 변환
                     parsed_data = self._parse_realtime_data(data)
@@ -166,10 +193,6 @@ class LSRealtimeService:
                 except websockets.exceptions.ConnectionClosed:
                     logger.warning("WebSocket connection closed")
                     break
-                
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse JSON message: {e}, message: {message[:100]}")
-                    continue
                 
                 except Exception as e:
                     logger.error(f"Error receiving message: {e}", exc_info=True)

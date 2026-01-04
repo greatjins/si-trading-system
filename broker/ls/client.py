@@ -1,9 +1,16 @@
 """
 LS증권 API 클라이언트
 """
+import asyncio
 import httpx
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
 
 from broker.ls.oauth import LSOAuth, LSTokenManager
 from utils.logger import setup_logger
@@ -62,6 +69,10 @@ class LSClient:
         
         self.is_connected = False
         
+        # Throttling: 마지막 요청 시간 추적 (LS증권 API 제한: 초당 1건)
+        self._last_request_time: Optional[datetime] = None
+        self._min_request_interval = 1.1  # 초 (초당 1건 제한을 고려한 안전 마진)
+        
         logger.info(f"LSClient initialized for account: {self.account_id}")
     
     async def connect(self):
@@ -112,6 +123,106 @@ class LSClient:
         else:
             return await self.oauth.ensure_valid_token()
     
+    async def _throttle_request(self):
+        """
+        Throttling: 최소 요청 간격 보장 (1.1초 - LS증권 API 초당 1건 제한)
+        """
+        if self._last_request_time is not None:
+            elapsed = (datetime.now(timezone.utc) - self._last_request_time).total_seconds()
+            if elapsed < self._min_request_interval:
+                wait_time = self._min_request_interval - elapsed
+                logger.debug(f"Throttling: waiting {wait_time:.3f}s before next request")
+                await asyncio.sleep(wait_time)
+        
+        self._last_request_time = datetime.now(timezone.utc)
+    
+    async def _execute_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Dict[str, Any] = None,
+        data: Dict[str, Any] = None,
+        request_headers: Dict[str, str] = None
+    ) -> httpx.Response:
+        """
+        실제 API 요청 실행
+        
+        Args:
+            method: HTTP 메서드
+            endpoint: API 엔드포인트
+            params: 쿼리 파라미터
+            data: 요청 바디
+            request_headers: 요청 헤더
+            
+        Returns:
+            HTTP 응답
+            
+        Raises:
+            httpx.HTTPStatusError: HTTP 에러 (429 포함)
+        """
+        response = await self.client.request(
+            method=method,
+            url=endpoint,
+            params=params,
+            json=data,
+            headers=request_headers
+        )
+        
+        # Rate Limit (429) 에러 발생 시 Retry-After 헤더 확인
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit (429) detected - Retry-After: {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                except ValueError:
+                    logger.warning(f"Rate limit (429) - invalid Retry-After header: {retry_after}")
+        
+        # 모든 HTTP 에러는 예외로 변환 (tenacity 재시도 트리거)
+        response.raise_for_status()
+        return response
+    
+    @retry(
+        stop=stop_after_attempt(3),  # 최대 3번 재시도
+        wait=wait_exponential(multiplier=1, min=1, max=10),  # 지수 백오프: 1초, 2초, 4초...
+        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        reraise=True
+    )
+    async def _execute_request_with_retry(
+        self,
+        method: str,
+        endpoint: str,
+        params: Dict[str, Any] = None,
+        data: Dict[str, Any] = None,
+        request_headers: Dict[str, str] = None
+    ) -> httpx.Response:
+        """
+        실제 API 요청 실행 (Rate Limit 재시도 포함)
+        
+        tenacity 데코레이터를 통해 429 에러 발생 시 최대 3번까지 지수 백오프로 재시도
+        
+        Args:
+            method: HTTP 메서드
+            endpoint: API 엔드포인트
+            params: 쿼리 파라미터
+            data: 요청 바디
+            request_headers: 요청 헤더
+            
+        Returns:
+            HTTP 응답
+            
+        Raises:
+            httpx.HTTPStatusError: HTTP 에러 (재시도 후에도 실패)
+        """
+        return await self._execute_request(
+            method=method,
+            endpoint=endpoint,
+            params=params,
+            data=data,
+            request_headers=request_headers
+        )
+    
     async def request(
         self,
         method: str,
@@ -121,7 +232,11 @@ class LSClient:
         headers: Dict[str, str] = None
     ) -> Dict[str, Any]:
         """
-        API 요청
+        API 요청 (Throttling 및 Rate Limit 재시도 포함)
+        
+        안정성 기능:
+        1. Throttling: 모든 API 요청 사이에 최소 1.1초 간격 보장 (LS증권 API 초당 1건 제한)
+        2. Rate Limit 재시도: 429 에러 발생 시 최대 3번까지 지수 백오프로 재시도
         
         Args:
             method: HTTP 메서드 (GET, POST, PUT, DELETE)
@@ -134,13 +249,16 @@ class LSClient:
             응답 데이터
             
         Raises:
-            Exception: API 요청 실패
+            Exception: API 요청 실패 (재시도 후에도 실패)
         """
         try:
-            # 유효한 토큰 획득
+            # ===== 1단계: Throttling (최소 1.1초 간격 - LS증권 API 초당 1건 제한) =====
+            await self._throttle_request()
+            
+            # ===== 2단계: 유효한 토큰 획득 =====
             token = await self._get_valid_token()
             
-            # LS증권 API 헤더 구성 (ProgramGarden 방식)
+            # ===== 3단계: LS증권 API 헤더 구성 =====
             request_headers = {
                 "Content-Type": "application/json; charset=utf-8",
                 "authorization": f"Bearer {token}",  # Bearer 포함
@@ -163,30 +281,34 @@ class LSClient:
             
             # 디버깅: 요청 정보 로그
             logger.info(f"Request to {endpoint}")
-            logger.info(f"Request method: {method}")
-            logger.info(f"Request headers: {request_headers}")
-            logger.info(f"Request params: {params}")
-            logger.info(f"Request body: {data}")
+            logger.debug(f"Request method: {method}")
+            logger.debug(f"Request headers: {request_headers}")
+            logger.debug(f"Request params: {params}")
+            logger.debug(f"Request body: {data}")
             
-            # 요청 실행
-            response = await self.client.request(
+            # ===== 4단계: 요청 실행 (Rate Limit 재시도 포함) =====
+            response = await self._execute_request_with_retry(
                 method=method,
-                url=endpoint,
+                endpoint=endpoint,
                 params=params,
-                json=data,
-                headers=request_headers
+                data=data,
+                request_headers=request_headers
             )
-            
-            response.raise_for_status()
             
             return response.json()
         
         except httpx.HTTPStatusError as e:
-            logger.error(f"API request failed: {e.response.status_code} - {e.response.text}")
-            raise Exception(f"API error: {e.response.text}")
+            # Rate Limit (429) 에러는 재시도 로직에서 처리됨
+            # 여기서는 최종 실패 시에만 도달
+            if e.response.status_code == 429:
+                logger.error(f"Rate limit (429) exceeded after retries: {e.response.text}")
+                raise Exception(f"Rate limit exceeded: {e.response.text}")
+            else:
+                logger.error(f"API request failed: {e.response.status_code} - {e.response.text}")
+                raise Exception(f"API error ({e.response.status_code}): {e.response.text}")
         
         except Exception as e:
-            logger.error(f"API request failed: {e}")
+            logger.error(f"API request failed: {e}", exc_info=True)
             raise
     
     async def get(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
