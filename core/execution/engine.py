@@ -359,88 +359,33 @@ class ExecutionEngine:
     
     def determine_market(self) -> Optional[str]:
         """
-        현재 시간과 장운영정보에 따라 시장 구분 결정
+        현재 시간에 따라 시장 구분 결정 (mbr_no 반환)
         
-        우선순위:
-        1. JIF(장운영정보)의 실제 jangubun과 jstatus 값 최우선 참조
-        2. jstatus가 41(장종료)이면 해당 시장으로 주문하지 않음
-        3. MarketStatusManager의 활성 상태 확인
-        4. 시간대별 기본 시장 구분
+        시간대별 시장 구분:
+        - 08:00 ~ 08:50: NXT (장전 시간외)
+        - 09:00 ~ 15:30: KRX (정규장)
+        - 그 외 시간: None (주문 불가)
         
         Returns:
             "KRX" 또는 "NXT" 또는 None (주문 불가 시간)
         """
-        from datetime import timezone, timedelta
-        
-        # JIF 상태 정보 가져오기 (최우선 참조)
-        status_info = self.market_status_manager.get_status()
-        krx_status = status_info.get("krx_status")
-        nxt_status = status_info.get("nxt_status")
-        
-        # 장종료(41) 신호 확인 - 최우선 방어 로직
-        if krx_status == "41":
-            logger.warning(
-                f"KRX 장종료 신호 수신 (jstatus=41). 시간이 남았더라도 KRX로 주문하지 않습니다. "
-                f"현재 시간: {get_exchange_time().time().strftime('%H:%M:%S')}"
-            )
-            # NXT가 활성 상태이면 NXT 반환, 아니면 None
-            if status_info.get("nxt_active", False) and nxt_status != "41":
-                return "NXT"
-            return None
-        
-        if nxt_status == "41":
-            logger.warning(
-                f"NXT 장종료 신호 수신 (jstatus=41). 시간이 남았더라도 NXT로 주문하지 않습니다. "
-                f"현재 시간: {get_exchange_time().time().strftime('%H:%M:%S')}"
-            )
-            # KRX가 활성 상태이면 KRX 반환, 아니면 None
-            if status_info.get("krx_active", False) and krx_status != "41":
-                return "KRX"
-            return None
-        
         # 거래소 시간 사용 (서버 시간 동기화)
         exchange_time = get_exchange_time()
         current_time = exchange_time.time()
         
-        # MarketStatusManager의 활성 상태 확인
-        krx_active = status_info.get("krx_active", False)
-        nxt_active = status_info.get("nxt_active", False)
-        
-        # JIF 상태 정보가 있으면 우선 사용
-        if krx_status is not None or nxt_status is not None:
-            # JIF 상태 기반으로 시장 결정
-            if krx_active and nxt_active:
-                # 둘 다 활성인 경우 시간대에 따라 우선순위 결정
-                if time(9, 0) <= current_time <= time(15, 30):
-                    return "KRX"  # 정규장 시간대는 KRX 우선
-                else:
-                    return "NXT"  # 시간외 시간대는 NXT 우선
-            elif krx_active:
-                return "KRX"
-            elif nxt_active:
-                return "NXT"
-            else:
-                # JIF 상태는 있지만 둘 다 비활성인 경우
-                logger.warning(
-                    f"JIF 상태 확인: KRX jstatus={krx_status}, NXT jstatus={nxt_status}. "
-                    f"둘 다 비활성 상태입니다."
-                )
-                return None
-        
-        # JIF 상태 정보가 없으면 시간대별 기본 시장 구분 (폴백)
         # 08:00 ~ 08:50: NXT (장전 시간외)
         if time(8, 0) <= current_time <= time(8, 50):
+            logger.debug(f"시간대별 시장 구분: NXT (현재 시간: {current_time.strftime('%H:%M:%S')})")
             return "NXT"
         
         # 09:00 ~ 15:30: KRX (정규장)
         if time(9, 0) <= current_time <= time(15, 30):
+            logger.debug(f"시간대별 시장 구분: KRX (현재 시간: {current_time.strftime('%H:%M:%S')})")
             return "KRX"
         
         # 그 외 시간은 주문 불가
         logger.warning(
-            f"주문 불가 시간대입니다. 현재 시간: {current_time.strftime('%H:%M:%S')} (KST), "
-            f"KRX 활성={krx_active}, NXT 활성={nxt_active}, "
-            f"KRX jstatus={krx_status}, NXT jstatus={nxt_status}"
+            f"주문 불가 시간대입니다. 현재 시간: {current_time.strftime('%H:%M:%S')} (KST)"
         )
         return None
     

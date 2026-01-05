@@ -255,15 +255,86 @@ class LSAdapter(BrokerBase):
         """
         logger.info(f"Placing order: {order.symbol}")
         
+        # Enum을 문자열로 변환
+        side_str = order.side.value if hasattr(order.side, 'value') else str(order.side)
+        order_type_str = order.order_type.value if hasattr(order.order_type, 'value') else str(order.order_type)
+        
+        # mbr_no 가져오기 (Order 객체의 metadata에서 또는 기본값)
+        mbr_no = "KRX"  # 기본값
+        if hasattr(order, 'metadata') and order.metadata and 'mbr_no' in order.metadata:
+            mbr_no = order.metadata['mbr_no']
+        
         order_id = await self.order_service.place_order(
+            account_id=self.account_id,
             symbol=order.symbol,
-            side=order.side,
+            side=side_str,
             quantity=order.quantity,
-            order_type=order.order_type,
-            price=order.price
+            order_type=order_type_str,
+            price=order.price,
+            mbr_no=mbr_no
         )
         
         return order_id
+    
+    async def get_orders(self) -> List[Order]:
+        """
+        모든 주문 내역 조회 (체결/미체결 포함)
+        
+        Returns:
+            주문 리스트
+        """
+        from utils.types import OrderSide, OrderType, OrderStatus
+        
+        logger.info("Getting all orders")
+        
+        # LSOrderService에서 주문 내역 가져오기
+        ls_orders = await self.order_service.get_orders(self.account_id)
+        
+        # LSOrder를 Order로 변환
+        orders = []
+        for ls_order in ls_orders:
+            # side 변환 (문자열 또는 Enum -> OrderSide)
+            side_str = ls_order.side.value if hasattr(ls_order.side, 'value') else str(ls_order.side)
+            side = OrderSide.BUY if side_str.lower() == "buy" else OrderSide.SELL
+            
+            # order_type 변환 (문자열 또는 Enum -> OrderType)
+            order_type_str = ls_order.order_type.value if hasattr(ls_order.order_type, 'value') else str(ls_order.order_type)
+            order_type = OrderType.MARKET if order_type_str.lower() == "market" else OrderType.LIMIT
+            
+            # status 변환 (문자열 -> OrderStatus)
+            status_str = ls_order.status.value if hasattr(ls_order.status, 'value') else str(ls_order.status)
+            
+            # 체결 완료 여부 확인
+            if ls_order.filled_quantity >= ls_order.quantity and ls_order.filled_quantity > 0:
+                status = OrderStatus.FILLED
+            elif ls_order.filled_quantity > 0:
+                status = OrderStatus.PARTIAL_FILLED
+            else:
+                # 상태 문자열 매핑
+                status_map = {
+                    "pending": OrderStatus.PENDING,
+                    "submitted": OrderStatus.SUBMITTED,
+                    "partial": OrderStatus.PARTIAL_FILLED,
+                    "filled": OrderStatus.FILLED,
+                    "cancelled": OrderStatus.CANCELLED,
+                    "rejected": OrderStatus.REJECTED,
+                }
+                status = status_map.get(status_str.lower(), OrderStatus.PENDING)
+            
+            order = Order(
+                order_id=ls_order.order_id,
+                symbol=ls_order.symbol,
+                side=side,
+                order_type=order_type,
+                quantity=ls_order.quantity,
+                price=ls_order.price,
+                filled_quantity=ls_order.filled_quantity,
+                status=status,
+                created_at=ls_order.order_time or ls_order.created_at or datetime.now()
+            )
+            orders.append(order)
+        
+        return orders
     
     async def cancel_order(self, order_id: str) -> bool:
         """

@@ -1,8 +1,35 @@
-feat: 전략 타입(is_portfolio) 설정 기능 추가 및 403 에러 처리 개선
+feat: ICT 핵심 로직 및 LS증권 실시간 데이터 연동
 
-- 전략 빌더 UI에 단일 종목/포트폴리오 선택 옵션 추가
-- BaseStrategy.is_portfolio_strategy()에서 params의 is_portfolio 우선 확인
-- StrategyFactory에서 config의 is_portfolio를 parameters에 자동 복사
-- 전략 목록 API에서 is_portfolio 정확도 향상
-- AccountInfo 컴포넌트의 403 에러 처리 개선 (토큰 확인, 자동 중지)
+1. ICT 지표 함수 개선 (utils/indicators.py)
+   - calculate_fvg: 캔들 1의 Low와 캔들 3의 High 사이 간격 계산
+     * Bullish FVG: 캔들 1의 High < 캔들 3의 Low
+     * Bearish FVG: 캔들 1의 Low > 캔들 3의 High
+     * 가격 범위(Top, Bottom) 및 유지 여부(filled) 추적
+   - calculate_order_block: 강한 추세 직전 마지막 반대 색상 캔들의 몸통 범위를 OB로 정의
+     * Bullish OB: 하락 추세에서 상승 전환 전 마지막 하락 캔들의 몸통
+     * Bearish OB: 상승 추세에서 하락 전환 전 마지막 상승 캔들의 몸통
 
+2. ICT 전략 Multi-timeframe 로직 (core/strategy/examples/ict_strategy.py)
+   - 일봉(1d) 데이터에서 FVG와 OB 구간 계산
+   - 60분봉 데이터의 현재가가 일봉 OB/FVG 구간 진입 체크
+   - 구간 진입 후 60분봉 MSS 발생 시 매수 시그널 생성
+   - DataRepository를 통한 일봉 데이터 로드
+
+3. LS증권 API 직접 호출 (data/repository.py)
+   - get_ohlc 함수 개선: 로컬 캐시 우선, 부족 시 브로커 API 호출
+   - 일봉: TR 't8413' 사용
+   - 60분봉: TR 't8410' 사용
+   - JSON 응답을 표준 스키마로 변환
+   - Parquet 파일 즉시 저장 (Caching)
+   - API 호출 제한 고려 (asyncio.sleep 1.1초)
+
+4. WebSocket 실시간 데이터 (broker/ls/realtime.py)
+   - websockets 라이브러리로 'wss://openapi.ls-sec.co.kr:9443/websocket' 연결
+   - 실시간 주식체결(S3_) 데이터 구독 및 수신
+   - 수신 데이터를 {'symbol', 'price', 'volume', 'timestamp'} 구조로 변환하여 yield
+   - 연결 유지: ping/pong (20초 간격)
+   - 예외 처리 및 재연결 로직 포함
+
+5. 전략 엔진 연결 (broker/ls/adapter.py)
+   - stream_realtime에서 LSRealtimeService 연결
+   - 토큰 관리 및 예외 처리 개선

@@ -21,7 +21,7 @@ export const ENDPOINTS = {
   // Orders
   ORDERS: {
     LIST: `${API_BASE}/api/orders`,
-    CREATE: `${API_BASE}/api/orders`,
+    CREATE: `${API_BASE}/api/orders/`,
     GET: (orderId: string) => `${API_BASE}/api/orders/${orderId}`,
     CANCEL: (orderId: string) => `${API_BASE}/api/orders/${orderId}`,
   },

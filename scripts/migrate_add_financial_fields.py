@@ -30,6 +30,8 @@ def migrate():
         password = config.get("database.password", "")
         db_url = f"postgresql+pg8000://{username}:{password}@{host}:{port}/{database}"
     
+    logger = setup_logger(__name__)
+    
     logger.info(f"데이터베이스 연결: {db_type}")
     engine = create_engine(db_url, echo=True)
     

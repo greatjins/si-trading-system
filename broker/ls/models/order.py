@@ -31,6 +31,12 @@ class OrderStatus(str, Enum):
     REJECTED = "rejected"      # 거부
 
 
+class MarketType(str, Enum):
+    """시장 구분"""
+    KRX = "KRX"  # 한국거래소
+    NXT = "NXT"  # 넥스트레이드
+
+
 @dataclass
 class LSOrder:
     """LS증권 주문"""
@@ -79,6 +85,32 @@ class LSOrder:
     
     message: Optional[str] = None
     """메시지"""
+
+
+@dataclass
+class LSOrderRequest:
+    """LS증권 주문 요청"""
+    
+    account_id: str
+    """계좌번호"""
+    
+    symbol: str
+    """종목 코드"""
+    
+    side: OrderSide
+    """매수/매도"""
+    
+    quantity: int
+    """주문 수량"""
+    
+    order_type: OrderType
+    """주문 유형"""
+    
+    price: Optional[float] = None
+    """주문 가격 (시장가는 None)"""
+    
+    mbr_no: MarketType = MarketType.KRX
+    """회원사번호 (기본값: KRX)"""
 
 
 @dataclass

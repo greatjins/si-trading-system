@@ -186,6 +186,10 @@ class MockBroker(BrokerBase):
         """미체결 주문 반환"""
         return [order for order in self.orders.values() if order.is_active()]
     
+    async def get_orders(self) -> List[Order]:
+        """모든 주문 내역 반환 (체결/미체결 포함)"""
+        return list(self.orders.values())
+    
     async def stream_realtime(
         self,
         symbols: List[str]
