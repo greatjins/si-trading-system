@@ -440,7 +440,7 @@ def calculate_ichimoku(highs: List[float], lows: List[float], closes: List[float
 
 def calculate_fvg(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Fair Value Gap (FVG) 계산 - ICT 핵심 로직
+    Fair Value Gap (FVG) 계산 - ICT 핵심 로직 (벡터 연산 최적화)
     
     3개 캔들을 비교하여 Fair Value Gap 구간을 찾고, 이후 캔들들이 FVG를 채웠는지 추적합니다.
     
@@ -459,6 +459,7 @@ def calculate_fvg(df: pd.DataFrame) -> pd.DataFrame:
         - fvg_filled_at: FVG가 채워진 인덱스 (채워지지 않았으면 None)
     """
     if len(df) < 3:
+        df = df.copy()
         df['fvg_type'] = None
         df['fvg_top'] = None
         df['fvg_bottom'] = None
@@ -469,98 +470,114 @@ def calculate_fvg(df: pd.DataFrame) -> pd.DataFrame:
     # 결과 컬럼 초기화
     df = df.copy()
     df['fvg_type'] = None
-    df['fvg_top'] = None
-    df['fvg_bottom'] = None
+    df['fvg_top'] = np.nan
+    df['fvg_bottom'] = np.nan
     df['fvg_filled'] = None
     df['fvg_filled_at'] = None
     
-    # FVG 리스트 저장 (나중에 필드 여부 확인용)
-    fvg_list = []
+    # 벡터 연산을 위한 shift 사용
+    # candle1 = 2칸 전, candle2 = 1칸 전 (중간), candle3 = 현재
+    high_2 = df['high'].shift(2)  # candle1 high
+    low_2 = df['low'].shift(2)     # candle1 low
+    high_0 = df['high']             # candle3 high
+    low_0 = df['low']               # candle3 low
     
-    for i in range(2, len(df)):
-        candle1 = df.iloc[i - 2]  # 첫 번째 캔들
-        candle2 = df.iloc[i - 1]  # 두 번째 캔들 (중간)
-        candle3 = df.iloc[i]      # 세 번째 캔들
-        
-        # Bullish FVG: 캔들 1의 High < 캔들 3의 Low
-        # (캔들 1의 Low와 캔들 3의 High 사이의 간격)
-        bullish_fvg = candle1['high'] < candle3['low']
-        
-        # Bearish FVG: 캔들 1의 Low > 캔들 3의 High
-        # (캔들 1의 High와 캔들 3의 Low 사이의 간격)
-        bearish_fvg = candle1['low'] > candle3['high']
-        
-        if bullish_fvg:
-            # Bullish FVG: Top = 캔들 3의 Low, Bottom = 캔들 1의 High
-            fvg_top = candle3['low']
-            fvg_bottom = candle1['high']
-            
-            # 중간 캔들(캔들 2)에 FVG 정보 표시
-            df.iloc[i - 1, df.columns.get_loc('fvg_type')] = 'bullish'
-            df.iloc[i - 1, df.columns.get_loc('fvg_top')] = fvg_top
-            df.iloc[i - 1, df.columns.get_loc('fvg_bottom')] = fvg_bottom
-            
-            # FVG 정보 저장
-            fvg_list.append({
-                'index': i - 1,  # 중간 캔들 인덱스
-                'type': 'bullish',
-                'top': fvg_top,
-                'bottom': fvg_bottom,
-                'filled': False,
-                'filled_at': None
-            })
-            
-        elif bearish_fvg:
-            # Bearish FVG: Top = 캔들 1의 Low, Bottom = 캔들 3의 High
-            fvg_top = candle1['low']
-            fvg_bottom = candle3['high']
-            
-            # 중간 캔들(캔들 2)에 FVG 정보 표시
-            df.iloc[i - 1, df.columns.get_loc('fvg_type')] = 'bearish'
-            df.iloc[i - 1, df.columns.get_loc('fvg_top')] = fvg_top
-            df.iloc[i - 1, df.columns.get_loc('fvg_bottom')] = fvg_bottom
-            
-            # FVG 정보 저장
-            fvg_list.append({
-                'index': i - 1,  # 중간 캔들 인덱스
-                'type': 'bearish',
-                'top': fvg_top,
-                'bottom': fvg_bottom,
-                'filled': False,
-                'filled_at': None
-            })
+    # Bullish FVG 조건: candle1의 High < candle3의 Low
+    bullish_fvg_mask = (high_2 < low_0) & (high_2.notna()) & (low_0.notna())
     
-    # FVG 필드 여부 확인 (이후 캔들들이 FVG 구간을 침범했는지)
-    for fvg in fvg_list:
-        fvg_idx = fvg['index']
-        fvg_top = fvg['top']
-        fvg_bottom = fvg['bottom']
+    # Bearish FVG 조건: candle1의 Low > candle3의 High
+    bearish_fvg_mask = (low_2 > high_0) & (low_2.notna()) & (high_0.notna())
+    
+    # Bullish FVG: Top = candle3의 Low, Bottom = candle1의 High
+    # 중간 캔들(shift(1))에 FVG 정보 표시
+    # 벡터 연산: 인덱스 위치를 사용하여 한 번에 계산
+    bullish_positions = np.where(bullish_fvg_mask)[0]
+    if len(bullish_positions) > 0:
+        # candle3 인덱스 = bullish_positions
+        # 중간 캔들 인덱스 = bullish_positions - 1
+        # candle1 인덱스 = bullish_positions - 2
+        middle_positions = bullish_positions - 1
+        candle1_positions = bullish_positions - 2
         
-        # FVG 이후의 캔들들을 확인
-        for j in range(fvg_idx + 1, len(df)):
-            candle = df.iloc[j]
+        # 유효한 인덱스만 선택 (범위 내)
+        valid_mask = (middle_positions >= 0) & (candle1_positions >= 0)
+        if valid_mask.any():
+            valid_middle_positions = middle_positions[valid_mask]
+            valid_candle1_positions = candle1_positions[valid_mask]
+            valid_candle3_positions = bullish_positions[valid_mask]
             
-            # 상승 FVG는 하락 캔들이 채움 (저가가 FVG 구간을 침범)
-            if fvg['type'] == 'bullish':
-                if candle['low'] <= fvg_top:
-                    fvg['filled'] = True
-                    fvg['filled_at'] = j
-                    df.iloc[fvg_idx, df.columns.get_loc('fvg_filled')] = True
-                    df.iloc[fvg_idx, df.columns.get_loc('fvg_filled_at')] = j
-                    break
+            valid_middle_idx = df.index[valid_middle_positions]
+            candle1_idx = df.index[valid_candle1_positions]
+            candle3_idx = df.index[valid_candle3_positions]
             
-            # 하락 FVG는 상승 캔들이 채움 (고가가 FVG 구간을 침범)
-            elif fvg['type'] == 'bearish':
-                if candle['high'] >= fvg_bottom:
-                    fvg['filled'] = True
-                    fvg['filled_at'] = j
-                    df.iloc[fvg_idx, df.columns.get_loc('fvg_filled')] = True
-                    df.iloc[fvg_idx, df.columns.get_loc('fvg_filled_at')] = j
-                    break
+            df.loc[valid_middle_idx, 'fvg_type'] = 'bullish'
+            df.loc[valid_middle_idx, 'fvg_top'] = df.loc[candle3_idx, 'low'].values
+            df.loc[valid_middle_idx, 'fvg_bottom'] = df.loc[candle1_idx, 'high'].values
+    
+    # Bearish FVG: Top = candle1의 Low, Bottom = candle3의 High
+    bearish_positions = np.where(bearish_fvg_mask)[0]
+    if len(bearish_positions) > 0:
+        # candle3 인덱스 = bearish_positions
+        # 중간 캔들 인덱스 = bearish_positions - 1
+        # candle1 인덱스 = bearish_positions - 2
+        middle_positions = bearish_positions - 1
+        candle1_positions = bearish_positions - 2
         
-        # 채워지지 않은 경우
-        if not fvg['filled']:
-            df.iloc[fvg_idx, df.columns.get_loc('fvg_filled')] = False
+        # 유효한 인덱스만 선택 (범위 내)
+        valid_mask = (middle_positions >= 0) & (candle1_positions >= 0)
+        if valid_mask.any():
+            valid_middle_positions = middle_positions[valid_mask]
+            valid_candle1_positions = candle1_positions[valid_mask]
+            valid_candle3_positions = bearish_positions[valid_mask]
+            
+            valid_middle_idx = df.index[valid_middle_positions]
+            candle1_idx = df.index[valid_candle1_positions]
+            candle3_idx = df.index[valid_candle3_positions]
+            
+            df.loc[valid_middle_idx, 'fvg_type'] = 'bearish'
+            df.loc[valid_middle_idx, 'fvg_top'] = df.loc[candle1_idx, 'low'].values
+            df.loc[valid_middle_idx, 'fvg_bottom'] = df.loc[candle3_idx, 'high'].values
+    
+    # FVG 채움 여부 확인 (벡터 연산)
+    # 각 FVG에 대해 이후 캔들들이 구간을 침범했는지 확인
+    fvg_mask = df['fvg_type'].notna()
+    if fvg_mask.any():
+        fvg_indices = df.index[fvg_mask]
+        
+        for fvg_idx in fvg_indices:
+            fvg_type = df.loc[fvg_idx, 'fvg_type']
+            fvg_top = df.loc[fvg_idx, 'fvg_top']
+            fvg_bottom = df.loc[fvg_idx, 'fvg_bottom']
+            
+            if pd.isna(fvg_top) or pd.isna(fvg_bottom):
+                continue
+            
+            # FVG 이후의 인덱스들
+            future_mask = df.index > fvg_idx
+            if not future_mask.any():
+                df.loc[fvg_idx, 'fvg_filled'] = False
+                continue
+            
+            future_df = df.loc[future_mask]
+            
+            if fvg_type == 'bullish':
+                # 상승 FVG는 하락 캔들이 채움 (저가가 FVG 구간을 침범)
+                filled_mask = future_df['low'] <= fvg_top
+                if filled_mask.any():
+                    filled_idx = future_df.index[filled_mask].iloc[0]
+                    df.loc[fvg_idx, 'fvg_filled'] = True
+                    df.loc[fvg_idx, 'fvg_filled_at'] = filled_idx
+                else:
+                    df.loc[fvg_idx, 'fvg_filled'] = False
+            elif fvg_type == 'bearish':
+                # 하락 FVG는 상승 캔들이 채움 (고가가 FVG 구간을 침범)
+                filled_mask = future_df['high'] >= fvg_bottom
+                if filled_mask.any():
+                    filled_idx = future_df.index[filled_mask].iloc[0]
+                    df.loc[fvg_idx, 'fvg_filled'] = True
+                    df.loc[fvg_idx, 'fvg_filled_at'] = filled_idx
+                else:
+                    df.loc[fvg_idx, 'fvg_filled'] = False
     
     return df
 
@@ -651,7 +668,7 @@ def calculate_liquidity_zones(df: pd.DataFrame, period: int = 20, tolerance: flo
 
 def calculate_order_block(df: pd.DataFrame, lookback: int = 20, volume_multiplier: float = 1.5) -> pd.DataFrame:
     """
-    Order Block 계산 - ICT 핵심 로직
+    Order Block 계산 - ICT 핵심 로직 (벡터 연산 최적화)
     
     강한 추세 발생 직전의 마지막 반대 색상 캔들을 찾아, 해당 캔들의 몸통 범위를 OB 구간으로 정의합니다.
     
@@ -672,6 +689,7 @@ def calculate_order_block(df: pd.DataFrame, lookback: int = 20, volume_multiplie
         - order_block_volume: Order Block의 거래량
     """
     if len(df) < lookback + 1:
+        df = df.copy()
         df['order_block_type'] = None
         df['order_block_top'] = None
         df['order_block_bottom'] = None
@@ -681,75 +699,115 @@ def calculate_order_block(df: pd.DataFrame, lookback: int = 20, volume_multiplie
     
     # volume 컬럼이 없으면 기본값 사용
     if 'volume' not in df.columns:
+        df = df.copy()
         df['volume'] = 0
+    else:
+        df = df.copy()
     
-    df = df.copy()
+    # 결과 컬럼 초기화
     df['order_block_type'] = None
-    df['order_block_top'] = None
-    df['order_block_bottom'] = None
+    df['order_block_top'] = np.nan
+    df['order_block_bottom'] = np.nan
     df['order_block_index'] = None
-    df['order_block_volume'] = None
+    df['order_block_volume'] = np.nan
     
-    # 캔들 색상 계산 (상승: True, 하락: False)
-    df['is_bullish'] = df['close'] > df['open']
+    # 캔들 색상 계산 (상승: True, 하락: False) - 벡터 연산
+    is_bullish = df['close'] > df['open']
     
-    # 평균 거래량 계산 (Order Block 필터링용)
-    avg_volume = df['volume'].rolling(window=lookback).mean()
+    # 평균 거래량 계산 (Order Block 필터링용) - 벡터 연산
+    avg_volume = df['volume'].rolling(window=lookback, min_periods=1).mean()
     
+    # 추세 방향 판단을 위한 벡터 연산
+    # 각 인덱스에서 lookback 기간 내의 고점/저점 인덱스 찾기
+    # rolling().idxmax()와 rolling().idxmin()을 사용하여 더 빠르게 계산
+    high_idx_series = pd.Series(index=df.index, dtype=object)
+    low_idx_series = pd.Series(index=df.index, dtype=object)
+    
+    # 벡터 연산으로 고점/저점 인덱스 계산
     for i in range(lookback, len(df)):
-        # 현재 위치에서 과거 lookback 기간 동안의 추세 확인
-        recent_candles = df.iloc[i - lookback:i]
-        
-        # 추세 방향 판단 (최근 고점/저점 비교)
-        recent_high_idx = recent_candles['high'].idxmax()
-        recent_low_idx = recent_candles['low'].idxmin()
-        
-        # 상승 추세: 최근 저점이 고점보다 앞에 있음
-        is_uptrend = recent_low_idx < recent_high_idx
-        
-        # 하락 추세: 최근 고점이 저점보다 앞에 있음
-        is_downtrend = recent_high_idx < recent_low_idx
-        
-        current_candle = df.iloc[i]
-        prev_candle = df.iloc[i - 1]
-        
-        # 평균 거래량 확인
-        current_avg_volume = avg_volume.iloc[i] if not pd.isna(avg_volume.iloc[i]) else 0
-        prev_volume = prev_candle['volume'] if 'volume' in prev_candle else 0
-        
-        # 상승 추세에서 하락 전환 감지 (현재 캔들이 하락 캔들이고, 이전이 상승 캔들)
-        if is_uptrend and not current_candle['is_bullish'] and prev_candle['is_bullish']:
-            # 거래량 조건 확인 (평균보다 높은 거래량)
-            if prev_volume >= current_avg_volume * volume_multiplier:
-                # 마지막 상승 캔들(이전 캔들)의 몸통 범위를 Order Block으로 정의
-                # Bearish OB: 상승 추세에서 하락 전환 전의 마지막 상승 캔들
-                body_top = max(prev_candle['open'], prev_candle['close'])
-                body_bottom = min(prev_candle['open'], prev_candle['close'])
-                
-                df.iloc[i - 1, df.columns.get_loc('order_block_type')] = 'bearish'
-                df.iloc[i - 1, df.columns.get_loc('order_block_top')] = body_top
-                df.iloc[i - 1, df.columns.get_loc('order_block_bottom')] = body_bottom
-                df.iloc[i - 1, df.columns.get_loc('order_block_index')] = i - 1
-                df.iloc[i - 1, df.columns.get_loc('order_block_volume')] = prev_volume
-        
-        # 하락 추세에서 상승 전환 감지 (현재 캔들이 상승 캔들이고, 이전이 하락 캔들)
-        elif is_downtrend and current_candle['is_bullish'] and not prev_candle['is_bullish']:
-            # 거래량 조건 확인 (평균보다 높은 거래량)
-            if prev_volume >= current_avg_volume * volume_multiplier:
-                # 마지막 하락 캔들(이전 캔들)의 몸통 범위를 Order Block으로 정의
-                # Bullish OB: 하락 추세에서 상승 전환 전의 마지막 하락 캔들
-                body_top = max(prev_candle['open'], prev_candle['close'])
-                body_bottom = min(prev_candle['open'], prev_candle['close'])
-                
-                df.iloc[i - 1, df.columns.get_loc('order_block_type')] = 'bullish'
-                df.iloc[i - 1, df.columns.get_loc('order_block_top')] = body_top
-                df.iloc[i - 1, df.columns.get_loc('order_block_bottom')] = body_bottom
-                df.iloc[i - 1, df.columns.get_loc('order_block_index')] = i - 1
-                df.iloc[i - 1, df.columns.get_loc('order_block_volume')] = prev_volume
+        window = df.iloc[i - lookback:i]
+        if len(window) > 0:
+            high_idx_series.iloc[i] = window['high'].idxmax()
+            low_idx_series.iloc[i] = window['low'].idxmin()
     
-    # is_bullish 컬럼 제거 (임시 컬럼)
-    if 'is_bullish' in df.columns:
-        df = df.drop(columns=['is_bullish'])
+    # 인덱스 비교를 위해 인덱스 위치로 변환 (벡터 연산)
+    # get_loc을 사용하여 인덱스 위치를 한 번에 계산
+    index_positions = {idx: pos for pos, idx in enumerate(df.index)}
+    
+    high_pos = high_idx_series.map(index_positions)
+    low_pos = low_idx_series.map(index_positions)
+    
+    # 상승 추세: 최근 저점이 고점보다 앞에 있음 (인덱스 위치가 작음)
+    is_uptrend = (low_pos < high_pos) & (low_pos.notna()) & (high_pos.notna())
+    
+    # 하락 추세: 최근 고점이 저점보다 앞에 있음 (인덱스 위치가 작음)
+    is_downtrend = (high_pos < low_pos) & (low_pos.notna()) & (high_pos.notna())
+    
+    # 캔들 색상 전환 감지 (벡터 연산)
+    prev_is_bullish = is_bullish.shift(1)
+    current_is_bearish = ~is_bullish
+    prev_is_bearish = ~prev_is_bullish
+    
+    # 상승 추세에서 하락 전환: 상승 추세 + 이전 상승 캔들 + 현재 하락 캔들
+    bearish_ob_mask = (
+        is_uptrend.shift(1) &  # 이전 시점의 상승 추세
+        prev_is_bullish &      # 이전 캔들이 상승
+        current_is_bearish     # 현재 캔들이 하락
+    )
+    
+    # 하락 추세에서 상승 전환: 하락 추세 + 이전 하락 캔들 + 현재 상승 캔들
+    bullish_ob_mask = (
+        is_downtrend.shift(1) &  # 이전 시점의 하락 추세
+        prev_is_bearish &        # 이전 캔들이 하락
+        is_bullish               # 현재 캔들이 상승
+    )
+    
+    # 거래량 조건 확인 (벡터 연산)
+    prev_volume = df['volume'].shift(1)
+    volume_threshold = avg_volume * volume_multiplier
+    volume_condition = prev_volume >= volume_threshold
+    
+    # Bearish OB 조건 결합
+    bearish_ob_final = bearish_ob_mask & volume_condition & (bearish_ob_mask.index >= df.index[lookback])
+    
+    # Bullish OB 조건 결합
+    bullish_ob_final = bullish_ob_mask & volume_condition & (bullish_ob_mask.index >= df.index[lookback])
+    
+    # Bearish OB 설정 (이전 캔들에 표시)
+    bearish_indices = df.index[bearish_ob_final]
+    if len(bearish_indices) > 0:
+        prev_indices = df.index[df.index.get_indexer(bearish_indices) - 1]
+        valid_prev_indices = prev_indices[prev_indices.isin(df.index)]
+        
+        if len(valid_prev_indices) > 0:
+            # 몸통 범위 계산 (벡터 연산)
+            body_top = df.loc[valid_prev_indices, ['open', 'close']].max(axis=1)
+            body_bottom = df.loc[valid_prev_indices, ['open', 'close']].min(axis=1)
+            prev_vol = df.loc[valid_prev_indices, 'volume']
+            
+            df.loc[valid_prev_indices, 'order_block_type'] = 'bearish'
+            df.loc[valid_prev_indices, 'order_block_top'] = body_top
+            df.loc[valid_prev_indices, 'order_block_bottom'] = body_bottom
+            df.loc[valid_prev_indices, 'order_block_index'] = valid_prev_indices
+            df.loc[valid_prev_indices, 'order_block_volume'] = prev_vol
+    
+    # Bullish OB 설정 (이전 캔들에 표시)
+    bullish_indices = df.index[bullish_ob_final]
+    if len(bullish_indices) > 0:
+        prev_indices = df.index[df.index.get_indexer(bullish_indices) - 1]
+        valid_prev_indices = prev_indices[prev_indices.isin(df.index)]
+        
+        if len(valid_prev_indices) > 0:
+            # 몸통 범위 계산 (벡터 연산)
+            body_top = df.loc[valid_prev_indices, ['open', 'close']].max(axis=1)
+            body_bottom = df.loc[valid_prev_indices, ['open', 'close']].min(axis=1)
+            prev_vol = df.loc[valid_prev_indices, 'volume']
+            
+            df.loc[valid_prev_indices, 'order_block_type'] = 'bullish'
+            df.loc[valid_prev_indices, 'order_block_top'] = body_top
+            df.loc[valid_prev_indices, 'order_block_bottom'] = body_bottom
+            df.loc[valid_prev_indices, 'order_block_index'] = valid_prev_indices
+            df.loc[valid_prev_indices, 'order_block_volume'] = prev_vol
     
     return df
 

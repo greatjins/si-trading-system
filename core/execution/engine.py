@@ -373,13 +373,18 @@ class ExecutionEngine:
         exchange_time = get_exchange_time()
         current_time = exchange_time.time()
         
+        # 시간을 분 단위로 변환하여 비교 (더 정확한 비교)
+        current_minutes = current_time.hour * 60 + current_time.minute
+        
         # 08:00 ~ 08:50: NXT (장전 시간외)
-        if time(8, 0) <= current_time <= time(8, 50):
+        # 08:00 = 480분, 08:50 = 530분
+        if 480 <= current_minutes <= 530:
             logger.debug(f"시간대별 시장 구분: NXT (현재 시간: {current_time.strftime('%H:%M:%S')})")
             return "NXT"
         
         # 09:00 ~ 15:30: KRX (정규장)
-        if time(9, 0) <= current_time <= time(15, 30):
+        # 09:00 = 540분, 15:30 = 930분
+        if 540 <= current_minutes <= 930:
             logger.debug(f"시간대별 시장 구분: KRX (현재 시간: {current_time.strftime('%H:%M:%S')})")
             return "KRX"
         
