@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime
 
 from utils.logger import setup_logger
+from utils.indicators import calculate_fvg, calculate_order_block
 
 logger = setup_logger(__name__)
 
@@ -46,9 +47,8 @@ class ICTAnalyzer:
         """
         Fair Value Gap (FVG) 탐지
         
-        FVG는 3개 봉 패턴으로 식별:
-        - Bullish FVG: 이전 고점 < 다음 저점 (상승 갭)
-        - Bearish FVG: 이전 저점 > 다음 고점 (하락 갭)
+        utils/indicators.py의 calculate_fvg 함수를 사용하여 FVG를 계산하고,
+        결과를 리스트 형태로 변환합니다.
         
         Args:
             bars: OHLC DataFrame (timestamp 인덱스, columns: open, high, low, close, volume)
@@ -65,40 +65,21 @@ class ICTAnalyzer:
         if len(bars) < 3:
             return []
         
-        fvgs = []
+        # utils/indicators.py의 공통 함수 사용
+        bars_with_fvg = calculate_fvg(bars.copy())
         
-        for i in range(2, len(bars)):
-            prev_bar = bars.iloc[i-2]
-            curr_bar = bars.iloc[i-1]
-            next_bar = bars.iloc[i]
-            
-            # Bullish FVG: 이전 고점 < 다음 저점
-            if prev_bar['high'] < next_bar['low']:
-                gap_size = (next_bar['low'] - prev_bar['high']) / prev_bar['high']
-                
-                if gap_size >= self.fvg_threshold:
-                    fvg = {
-                        "type": "BULLISH",
-                        "top": next_bar['low'],
-                        "bottom": prev_bar['high'],
-                        "timestamp": bars.index[i],
-                        "filled": False
-                    }
-                    fvgs.append(fvg)
-            
-            # Bearish FVG: 이전 저점 > 다음 고점
-            elif prev_bar['low'] > next_bar['high']:
-                gap_size = (prev_bar['low'] - next_bar['high']) / next_bar['high']
-                
-                if gap_size >= self.fvg_threshold:
-                    fvg = {
-                        "type": "BEARISH",
-                        "top": prev_bar['low'],
-                        "bottom": next_bar['high'],
-                        "timestamp": bars.index[i],
-                        "filled": False
-                    }
-                    fvgs.append(fvg)
+        # DataFrame에서 FVG 정보 추출하여 리스트로 변환
+        fvgs = []
+        for idx, row in bars_with_fvg.iterrows():
+            if pd.notna(row.get('fvg_type')):
+                fvg = {
+                    "type": row['fvg_type'].upper(),  # 'bullish' -> 'BULLISH'
+                    "top": row['fvg_top'],
+                    "bottom": row['fvg_bottom'],
+                    "timestamp": idx,
+                    "filled": row.get('fvg_filled', False)
+                }
+                fvgs.append(fvg)
         
         logger.debug(f"Detected {len(fvgs)} FVGs")
         return fvgs
@@ -107,9 +88,8 @@ class ICTAnalyzer:
         """
         Order Block (OB) 탐지
         
-        Order Block은 기관 투자자의 대량 주문이 집중된 구간:
-        - 높은 거래량 + 큰 몸통
-        - 이후 가격 반응 확인
+        utils/indicators.py의 calculate_order_block 함수를 사용하여 Order Block을 계산하고,
+        결과를 리스트 형태로 변환합니다.
         
         Args:
             bars: OHLC DataFrame
@@ -123,49 +103,28 @@ class ICTAnalyzer:
                 "strength": float
             }]
         """
-        if len(bars) < 10:
+        if len(bars) < 20:
             return []
         
+        # utils/indicators.py의 공통 함수 사용
+        bars_with_ob = calculate_order_block(
+            bars.copy(),
+            lookback=20,
+            volume_multiplier=self.ob_volume_ratio
+        )
+        
+        # DataFrame에서 Order Block 정보 추출하여 리스트로 변환
         order_blocks = []
-        
-        # 이동평균 거래량 계산
-        avg_volume = bars['volume'].rolling(window=20).mean()
-        
-        for i in range(5, len(bars) - 5):
-            bar = bars.iloc[i]
-            
-            # 거래량 및 몸통 크기 확인
-            volume_ratio = bar['volume'] / avg_volume.iloc[i] if avg_volume.iloc[i] > 0 else 0
-            body_size = abs(bar['close'] - bar['open']) / bar['open']
-            
-            # Order Block 조건: 높은 거래량 + 큰 몸통
-            if volume_ratio >= self.ob_volume_ratio and body_size >= self.ob_body_ratio:
-                # 다음 5개 봉에서 반응 확인
-                next_bars = bars.iloc[i+1:i+6]
-                
-                if bar['close'] > bar['open']:  # 양봉 Order Block
-                    # 이후 상승 지속 확인 (저점이 Order Block 하단 근처에서 유지)
-                    if next_bars['close'].min() > bar['low'] * 0.995:
-                        ob = {
-                            "type": "BULLISH",
-                            "top": bar['high'],
-                            "bottom": bar['low'],
-                            "timestamp": bars.index[i],
-                            "strength": volume_ratio
-                        }
-                        order_blocks.append(ob)
-                
-                else:  # 음봉 Order Block
-                    # 이후 하락 지속 확인 (고점이 Order Block 상단 근처에서 유지)
-                    if next_bars['close'].max() < bar['high'] * 1.005:
-                        ob = {
-                            "type": "BEARISH",
-                            "top": bar['high'],
-                            "bottom": bar['low'],
-                            "timestamp": bars.index[i],
-                            "strength": volume_ratio
-                        }
-                        order_blocks.append(ob)
+        for idx, row in bars_with_ob.iterrows():
+            if pd.notna(row.get('order_block_type')):
+                ob = {
+                    "type": row['order_block_type'].upper(),  # 'bullish' -> 'BULLISH'
+                    "top": row['order_block_top'],
+                    "bottom": row['order_block_bottom'],
+                    "timestamp": idx,
+                    "strength": row.get('order_block_volume', 0) / bars['volume'].mean() if bars['volume'].mean() > 0 else 0
+                }
+                order_blocks.append(ob)
         
         logger.debug(f"Detected {len(order_blocks)} Order Blocks")
         return order_blocks
