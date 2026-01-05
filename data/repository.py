@@ -49,18 +49,29 @@ class DataRepository:
     PostgreSQL 우선, 없으면 Parquet 파일 폴백
     """
     
-    def __init__(self, use_db: bool = True):
+    def __init__(self, use_db: bool = True, auto_evict: bool = True):
         """
         Args:
             use_db: DB 사용 여부 (False면 파일만 사용)
+            auto_evict: 자동 Cache Eviction 실행 여부 (기본: True)
         """
         self.use_db = use_db
         self.storage = FileStorage()
+        self.auto_evict = auto_evict
         
         if use_db:
             self.ohlc_repo = OHLCRepository()
         else:
             self.ohlc_repo = None
+        
+        # 초기화 시 Cache Eviction 실행 (선택적)
+        if auto_evict:
+            try:
+                evicted = self.storage.evict_old_data(retention_days=365)
+                if evicted > 0:
+                    logger.info(f"Initial cache eviction: {evicted} files removed")
+            except Exception as e:
+                logger.warning(f"Failed to run initial cache eviction: {e}")
     
     def get_ohlc(
         self,
@@ -107,31 +118,62 @@ class DataRepository:
                         logger.debug(f"Loaded {len(cached_data)} records from DB: {symbol}")
                         return cached_data
             
-            # 2. 로컬 캐시 확인: Parquet 파일(storage)에서 조회 시도
+            # 2. 로컬 캐시 확인: Parquet 파일(storage)에서 조회 시도 (최적화)
             if cached_data is None or cached_data.empty:
-                cached_data = self.storage.load(symbol, interval)
+                cached_data = self.storage.load(symbol, interval, start_date, end_date)
                 
-                # 날짜 필터링
+                # 인덱스 검증 및 정렬 확인
                 if not cached_data.empty:
-                    if start_date:
-                        cached_data = cached_data[cached_data.index >= start_date]
-                    if end_date:
-                        cached_data = cached_data[cached_data.index <= end_date]
+                    # timestamp 인덱스 확인
+                    if not isinstance(cached_data.index, pd.DatetimeIndex):
+                        logger.warning(f"Invalid index type for {symbol} ({interval}), fixing...")
+                        if 'timestamp' in cached_data.columns:
+                            cached_data.set_index('timestamp', inplace=True)
+                        else:
+                            logger.error(f"No timestamp column/index found for {symbol}")
+                            cached_data = pd.DataFrame()
+                    
+                    # 시계열 정렬 검증
+                    if not cached_data.index.is_monotonic_increasing:
+                        logger.warning(f"Data not sorted for {symbol} ({interval}), sorting...")
+                        cached_data = cached_data.sort_index()
                     
                     # 요청한 날짜 범위의 데이터가 충분한지 확인
                     if not cached_data.empty:
-                        if cached_data.index.min() <= start_date and cached_data.index.max() >= end_date:
+                        data_min = cached_data.index.min()
+                        data_max = cached_data.index.max()
+                        
+                        # 타임존 처리: DatetimeIndex와 datetime 비교 시 타임존 제거
+                        if isinstance(data_min, pd.Timestamp):
+                            data_min = data_min.to_pydatetime()
+                        if isinstance(data_max, pd.Timestamp):
+                            data_max = data_max.to_pydatetime()
+                        
+                        # naive datetime으로 변환하여 비교
+                        start_naive = start_date.replace(tzinfo=None) if start_date and start_date.tzinfo else start_date
+                        end_naive = end_date.replace(tzinfo=None) if end_date and end_date.tzinfo else end_date
+                        data_min_naive = data_min.replace(tzinfo=None) if data_min.tzinfo else data_min
+                        data_max_naive = data_max.replace(tzinfo=None) if data_max.tzinfo else data_max
+                        
+                        # 날짜 범위 충분성 체크 (약간의 여유를 둠)
+                        if data_min_naive <= start_naive and data_max_naive >= end_naive:
                             logger.debug(f"Loaded {len(cached_data)} records from file: {symbol}")
                             return cached_data
+                        else:
+                            logger.debug(
+                                f"Insufficient date range in cache for {symbol}: "
+                                f"cache=[{data_min_naive.date()}, {data_max_naive.date()}], "
+                                f"request=[{start_naive.date()}, {end_naive.date()}]"
+                            )
             
-            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우, 브로커 API 호출
+            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우, LSMarketService를 사용하여 API 호출
             if cached_data is None or cached_data.empty:
-                logger.info(f"No data found in DB or file for {symbol} ({interval}), fetching from broker API...")
+                logger.info(f"No data found in DB or file for {symbol} ({interval}), fetching from broker API using LSMarketService...")
             else:
-                logger.info(f"Insufficient data in cache for {symbol} ({interval}), fetching from broker API...")
+                logger.info(f"Insufficient data in cache for {symbol} ({interval}), fetching from broker API using LSMarketService...")
             
-            # 비동기 브로커 API 호출
-            ohlc_list = self._fetch_from_ls_api(symbol, interval, start_date, end_date)
+            # LSMarketService를 사용하여 API 호출
+            ohlc_list = self._fetch_from_ls_market_service(symbol, interval, start_date, end_date)
             
             if not ohlc_list:
                 logger.warning(f"No data fetched from broker API for {symbol}")
@@ -163,11 +205,17 @@ class DataRepository:
             # timestamp를 인덱스로 설정
             data.set_index('timestamp', inplace=True)
             
-            # 날짜 필터링
+            # 날짜 필터링 (이미 API에서 필터링되었지만 재확인)
             if start_date:
                 data = data[data.index >= start_date]
             if end_date:
                 data = data[data.index <= end_date]
+            
+            # 시계열 정렬 검증 및 정렬
+            if not data.empty:
+                if not data.index.is_monotonic_increasing:
+                    logger.warning(f"API data not sorted for {symbol}, sorting...")
+                    data = data.sort_index()
             
             # 5. 변환된 데이터를 data/storage.py를 통해 Parquet 파일로 즉시 저장 (Caching)
             # 반환하기 전에 자동으로 저장하여 다음 조회 시 빠르게 로드 가능
@@ -193,7 +241,7 @@ class DataRepository:
             logger.error(f"Failed to get OHLC data: {e}", exc_info=True)
             return pd.DataFrame()
     
-    def _fetch_from_ls_api(
+    def _fetch_from_ls_market_service(
         self,
         symbol: str,
         interval: str,
@@ -201,10 +249,10 @@ class DataRepository:
         end_date: datetime
     ) -> List[OHLC]:
         """
-        LS증권 API에서 OHLC 데이터 가져오기 (동기 래퍼)
+        LSMarketService를 사용하여 OHLC 데이터 가져오기 (동기 래퍼)
         
-        - 일봉: TR 't8451' 사용 (통합 주식차트 API)
-        - 60분봉: TR 't8452' 사용 (통합 주식차트 N분 API)
+        - 일봉: get_daily_ohlc 사용
+        - 60분봉: get_minute_ohlc 사용
         
         Args:
             symbol: 종목 코드
@@ -218,150 +266,42 @@ class DataRepository:
         async def _async_fetch():
             try:
                 from broker.ls.client import LSClient
+                from broker.ls.services.market import LSMarketService
                 import asyncio
                 
                 # LSClient 초기화 및 연결
                 async with LSClient() as client:
-                    # interval에 따라 TR 코드 결정
+                    # LSMarketService 초기화
+                    market_service = LSMarketService(client)
+                    
+                    # interval에 따라 적절한 메서드 호출
                     if interval == "1d":
-                        # 일봉: TR 't8451' (LS증권 OpenAPI 통합 주식차트 API)
-                        tr_id = "t8451"
-                        tr_in_block = "t8451InBlock"
-                        tr_out_block = "t8451OutBlock1"
-                        
-                        # 일봉 요청 파라미터
-                        request_data = {
-                            tr_in_block: {
-                                "shcode": symbol,
-                                "gubun": "2",  # 2:일봉
-                                "qrycnt": 500,  # 최대 조회 개수
-                                "sdate": start_date.strftime("%Y%m%d"),
-                                "edate": end_date.strftime("%Y%m%d"),
-                                "cts_date": "",
-                                "comp_yn": "N",  # 압축 여부
-                                "sujung": "Y",  # 수정주가 여부
-                                "exchgubun": "U"  # U:통합
-                            }
-                        }
+                        # 일봉 데이터 조회
+                        ohlc_list = await market_service.get_daily_ohlc(
+                            symbol=symbol,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
                     elif interval == "60m":
-                        # 60분봉: TR 't8452' (LS증권 OpenAPI 통합 주식차트 N분 API)
-                        tr_id = "t8452"
-                        tr_in_block = "t8452InBlock"
-                        tr_out_block = "t8452OutBlock1"
-                        
-                        # 60분봉 요청 파라미터
-                        # 분봉은 날짜 범위 대신 개수 기반 조회
+                        # 60분봉 데이터 조회
+                        # 날짜 범위를 개수로 변환
                         days_diff = (end_date - start_date).days
-                        qrycnt = min(days_diff * 6, 500)  # 하루 최대 6개 (9:00-15:30, 60분 간격)
+                        count = min(days_diff * 6, 500)  # 하루 최대 6개 (9:00-15:30, 60분 간격)
                         
-                        request_data = {
-                            tr_in_block: {
-                                "shcode": symbol,
-                                "ncnt": 60,  # 60분봉
-                                "qrycnt": qrycnt,
-                                "nday": "1",  # 조회영업일수
-                                "sdate": start_date.strftime("%Y%m%d"),
-                                "stime": "0900",  # 시작시간
-                                "edate": end_date.strftime("%Y%m%d"),
-                                "etime": "1530",  # 종료시간
-                                "cts_date": "",
-                                "cts_time": "",
-                                "comp_yn": "N",
-                                "exchgubun": "U"
-                            }
-                        }
+                        ohlc_list = await market_service.get_minute_ohlc(
+                            symbol=symbol,
+                            interval=60,
+                            count=count
+                        )
                     else:
                         logger.error(f"Unsupported interval: {interval}. Only '1d' and '60m' are supported.")
                         return []
                     
-                    # API 호출 (LSClient 내부에서 이미 1.1초 throttling 적용됨)
-                    response = await client.request(
-                        method="POST",
-                        endpoint="/stock/chart",
-                        data=request_data,
-                        headers={
-                            "tr_id": tr_id,
-                            "tr_cont": "N",
-                            "custtype": "P"
-                        }
-                    )
-                    
-                    # JSON 응답을 표준 스키마로 변환
-                    ohlc_list = []
-                    items = response.get(tr_out_block, [])
-                    
-                    logger.info(f"Fetched {len(items)} records from LS API (TR: {tr_id})")
-                    
-                    for item in items:
-                        try:
-                            # 일봉(t8451)과 분봉(t8452)의 필드명이 다를 수 있으므로 처리
-                            if interval == "1d":
-                                # 일봉(t8451) 필드명 파싱
-                                # LS증권 일봉 API는 date, open, high, low, close, jdiff_vol 사용
-                                date_str = item.get("date", "")
-                                if not date_str:
-                                    logger.warning(f"Missing date field in item: {item}")
-                                    continue
-                                
-                                timestamp = datetime.strptime(date_str, "%Y%m%d")
-                                open_price = float(item.get("open", 0))
-                                high_price = float(item.get("high", 0))
-                                low_price = float(item.get("low", 0))
-                                close_price = float(item.get("close", 0))
-                                # 거래량: jdiff_vol(일일거래량) 사용
-                                volume = int(item.get("jdiff_vol", 0))
-                            
-                            else:  # 분봉(t8452)
-                                # 분봉(t8452) 필드명 파싱
-                                # LS증권 분봉 API는 date, time, open, high, low, close, jdiff_vol 사용
-                                date_str = item.get("date", "")
-                                time_str = item.get("time", "")
-                                
-                                if not date_str:
-                                    logger.warning(f"Missing date field in item: {item}")
-                                    continue
-                                
-                                # 시간 문자열 처리 (10자리 형식: "0935000000" → "0935")
-                                if len(time_str) >= 4:
-                                    time_hhmm = time_str[:4]  # HHMM만 사용
-                                else:
-                                    time_hhmm = "0000"
-                                
-                                timestamp = datetime.strptime(f"{date_str}{time_hhmm}", "%Y%m%d%H%M")
-                                open_price = float(item.get("open", 0))
-                                high_price = float(item.get("high", 0))
-                                low_price = float(item.get("low", 0))
-                                close_price = float(item.get("close", 0))
-                                # 거래량: jdiff_vol(해당봉 거래량) 사용
-                                volume = int(item.get("jdiff_vol", 0))
-                            
-                            # 유효성 검증
-                            if open_price <= 0 or high_price <= 0 or low_price <= 0 or close_price <= 0:
-                                logger.warning(f"Invalid price data in item: {item}")
-                                continue
-                            
-                            # 표준 OHLC 객체 생성 (시스템 표준 스키마)
-                            ohlc = OHLC(
-                                symbol=symbol,
-                                timestamp=timestamp,
-                                open=open_price,
-                                high=high_price,
-                                low=low_price,
-                                close=close_price,
-                                volume=volume
-                            )
-                            ohlc_list.append(ohlc)
-                        except (ValueError, TypeError, KeyError) as e:
-                            logger.warning(f"Failed to parse OHLC item: {e}, item: {item}")
-                            continue
-                        except Exception as e:
-                            logger.error(f"Unexpected error parsing OHLC item: {e}, item: {item}", exc_info=True)
-                            continue
-                    
+                    logger.info(f"Fetched {len(ohlc_list)} records from LSMarketService (interval: {interval})")
                     return ohlc_list
                     
             except Exception as e:
-                logger.error(f"Failed to fetch from LS API: {e}", exc_info=True)
+                logger.error(f"Failed to fetch from LSMarketService: {e}", exc_info=True)
                 return []
         
         try:
@@ -380,7 +320,7 @@ class DataRepository:
                 # 이벤트 루프가 없으면 새로 생성
                 return asyncio.run(_async_fetch())
         except Exception as e:
-            logger.error(f"Error in _fetch_from_ls_api: {e}", exc_info=True)
+            logger.error(f"Error in _fetch_from_ls_market_service: {e}", exc_info=True)
             return []
     
     def _save_to_db(

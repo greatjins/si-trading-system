@@ -429,16 +429,12 @@ class ExecutionEngine:
         
         # JIF 상태 정보가 없으면 시간대별 기본 시장 구분 (폴백)
         # 08:00 ~ 08:50: NXT (장전 시간외)
-        if time(8, 0) <= current_time < time(8, 50):
+        if time(8, 0) <= current_time <= time(8, 50):
             return "NXT"
         
         # 09:00 ~ 15:30: KRX (정규장)
         if time(9, 0) <= current_time <= time(15, 30):
             return "KRX"
-        
-        # 15:40 ~ 20:00: NXT (장후 시간외)
-        if time(15, 40) <= current_time <= time(20, 0):
-            return "NXT"
         
         # 그 외 시간은 주문 불가
         logger.warning(
