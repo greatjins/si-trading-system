@@ -145,7 +145,7 @@ class LSOrderService:
                         "MgntrnCode": "000",  # 신용거래코드 (000:보통)
                         "LoanDt": "",  # 대출일
                         "OrdCndiTpCode": "0",  # 주문조건구분 (0:없음)
-                        "MbrNo": mbr_no  # 회원사번호 (KRX 또는 NXT)
+                        "MbrNo": mbr_no  # 회원사번호 (KRX 또는 NXT) - 시간대별 시장 구분
                     }
                 },
                 headers={

@@ -359,11 +359,11 @@ class ExecutionEngine:
     
     def determine_market(self) -> Optional[str]:
         """
-        현재 시간에 따라 시장 구분 결정 (mbr_no 반환)
+        한국 시간 기준 시간대별로 적절한 mbr_no를 반환
         
         시간대별 시장 구분:
-        - 08:00 ~ 08:50: NXT (장전 시간외)
-        - 09:00 ~ 15:30: KRX (정규장)
+        - 08:00 ~ 08:50: NXT (넥스트레이드, 장전 시간외)
+        - 09:00 ~ 15:30: KRX (한국거래소, 정규장)
         - 그 외 시간: None (주문 불가)
         
         Returns:
@@ -376,16 +376,22 @@ class ExecutionEngine:
         # 시간을 분 단위로 변환하여 비교 (더 정확한 비교)
         current_minutes = current_time.hour * 60 + current_time.minute
         
-        # 08:00 ~ 08:50: NXT (장전 시간외)
+        # 08:00 ~ 08:50: NXT (넥스트레이드, 장전 시간외)
         # 08:00 = 480분, 08:50 = 530분
         if 480 <= current_minutes <= 530:
-            logger.debug(f"시간대별 시장 구분: NXT (현재 시간: {current_time.strftime('%H:%M:%S')})")
+            logger.debug(
+                f"시간대별 시장 구분: NXT (넥스트레이드) - "
+                f"현재 시간: {current_time.strftime('%H:%M:%S')} (KST)"
+            )
             return "NXT"
         
-        # 09:00 ~ 15:30: KRX (정규장)
+        # 09:00 ~ 15:30: KRX (한국거래소, 정규장)
         # 09:00 = 540분, 15:30 = 930분
         if 540 <= current_minutes <= 930:
-            logger.debug(f"시간대별 시장 구분: KRX (현재 시간: {current_time.strftime('%H:%M:%S')})")
+            logger.debug(
+                f"시간대별 시장 구분: KRX (한국거래소) - "
+                f"현재 시간: {current_time.strftime('%H:%M:%S')} (KST)"
+            )
             return "KRX"
         
         # 그 외 시간은 주문 불가
@@ -409,10 +415,14 @@ class ExecutionEngine:
             account: 계좌 정보
             positions: 현재 포지션
         """
-        # 시장 구분 확인
+        # 시간대별 시장 구분 확인 (determine_market 메서드 사용)
+        # 08:00~08:50: NXT, 09:00~15:30: KRX
         mbr_no = self.determine_market()
         if mbr_no is None:
-            logger.warning(f"주문 불가 시간대: {signal.symbol} {signal.side.value} 주문 건너뜀")
+            logger.warning(
+                f"주문 불가 시간대: {signal.symbol} {signal.side.value} 주문 건너뜀 "
+                f"(현재 시간이 08:00~08:50 또는 09:00~15:30 범위를 벗어남)"
+            )
             return
         
         # 중복 진입 방지
@@ -440,10 +450,16 @@ class ExecutionEngine:
                 # 주문 생성
                 order = signal.to_order(f"RT_{datetime.now().strftime('%Y%m%d%H%M%S')}_{attempt}")
                 
-                # mbr_no를 Order 객체에 메타데이터로 추가 (LSAdapter에서 사용)
+                # determine_market()에서 결정된 mbr_no를 Order 객체에 메타데이터로 추가
+                # LSAdapter.place_order()에서 이 값을 읽어서 CSPAT00601InBlock1의 MbrNo 필드에 사용
                 if not hasattr(order, 'metadata'):
                     order.metadata = {}
                 order.metadata['mbr_no'] = mbr_no
+                
+                logger.debug(
+                    f"주문에 mbr_no 설정: {mbr_no} (시장 구분) - "
+                    f"{signal.symbol} {signal.side.value} {signal.quantity}"
+                )
                 
                 # 주문 제출
                 order_id = await self.broker.place_order(order)

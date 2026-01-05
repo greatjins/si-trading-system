@@ -538,42 +538,51 @@ def calculate_fvg(df: pd.DataFrame) -> pd.DataFrame:
             df.loc[valid_middle_idx, 'fvg_top'] = df.loc[candle1_idx, 'low'].values
             df.loc[valid_middle_idx, 'fvg_bottom'] = df.loc[candle3_idx, 'high'].values
     
-    # FVG 채움 여부 확인 (벡터 연산)
+    # FVG 채움 여부 확인 (완전 벡터 연산 최적화)
     # 각 FVG에 대해 이후 캔들들이 구간을 침범했는지 확인
     fvg_mask = df['fvg_type'].notna()
     if fvg_mask.any():
+        # FVG가 있는 인덱스들의 위치
+        fvg_positions = np.where(fvg_mask)[0]
         fvg_indices = df.index[fvg_mask]
         
-        for fvg_idx in fvg_indices:
-            fvg_type = df.loc[fvg_idx, 'fvg_type']
-            fvg_top = df.loc[fvg_idx, 'fvg_top']
-            fvg_bottom = df.loc[fvg_idx, 'fvg_bottom']
-            
-            if pd.isna(fvg_top) or pd.isna(fvg_bottom):
+        # 모든 FVG에 대해 한 번에 처리하기 위한 벡터 연산
+        # 각 FVG의 top/bottom을 배열로 추출
+        fvg_tops = df.loc[fvg_indices, 'fvg_top'].values
+        fvg_bottoms = df.loc[fvg_indices, 'fvg_bottom'].values
+        fvg_types = df.loc[fvg_indices, 'fvg_type'].values
+        
+        # 각 FVG에 대해 이후 데이터에서 채움 여부 확인
+        for i, (fvg_pos, fvg_idx) in enumerate(zip(fvg_positions, fvg_indices)):
+            if pd.isna(fvg_tops[i]) or pd.isna(fvg_bottoms[i]):
                 continue
             
-            # FVG 이후의 인덱스들
-            future_mask = df.index > fvg_idx
-            if not future_mask.any():
+            # FVG 이후의 모든 인덱스 (벡터 연산)
+            future_positions = np.arange(fvg_pos + 1, len(df))
+            if len(future_positions) == 0:
                 df.loc[fvg_idx, 'fvg_filled'] = False
                 continue
             
-            future_df = df.loc[future_mask]
+            future_lows = df['low'].iloc[future_positions].values
+            future_highs = df['high'].iloc[future_positions].values
+            future_indices = df.index[future_positions]
             
-            if fvg_type == 'bullish':
+            if fvg_types[i] == 'bullish':
                 # 상승 FVG는 하락 캔들이 채움 (저가가 FVG 구간을 침범)
-                filled_mask = future_df['low'] <= fvg_top
+                filled_mask = future_lows <= fvg_tops[i]
                 if filled_mask.any():
-                    filled_idx = future_df.index[filled_mask].iloc[0]
+                    first_filled_pos = np.where(filled_mask)[0][0]
+                    filled_idx = future_indices[first_filled_pos]
                     df.loc[fvg_idx, 'fvg_filled'] = True
                     df.loc[fvg_idx, 'fvg_filled_at'] = filled_idx
                 else:
                     df.loc[fvg_idx, 'fvg_filled'] = False
-            elif fvg_type == 'bearish':
+            elif fvg_types[i] == 'bearish':
                 # 하락 FVG는 상승 캔들이 채움 (고가가 FVG 구간을 침범)
-                filled_mask = future_df['high'] >= fvg_bottom
+                filled_mask = future_highs >= fvg_bottoms[i]
                 if filled_mask.any():
-                    filled_idx = future_df.index[filled_mask].iloc[0]
+                    first_filled_pos = np.where(filled_mask)[0][0]
+                    filled_idx = future_indices[first_filled_pos]
                     df.loc[fvg_idx, 'fvg_filled'] = True
                     df.loc[fvg_idx, 'fvg_filled_at'] = filled_idx
                 else:
@@ -717,23 +726,16 @@ def calculate_order_block(df: pd.DataFrame, lookback: int = 20, volume_multiplie
     # 평균 거래량 계산 (Order Block 필터링용) - 벡터 연산
     avg_volume = df['volume'].rolling(window=lookback, min_periods=1).mean()
     
-    # 추세 방향 판단을 위한 벡터 연산
-    # 각 인덱스에서 lookback 기간 내의 고점/저점 인덱스 찾기
-    # rolling().idxmax()와 rolling().idxmin()을 사용하여 더 빠르게 계산
-    high_idx_series = pd.Series(index=df.index, dtype=object)
-    low_idx_series = pd.Series(index=df.index, dtype=object)
+    # 추세 방향 판단을 위한 완전 벡터 연산 최적화
+    # rolling().idxmax()와 rolling().idxmin()을 사용하여 고점/저점 인덱스 계산
+    high_idx_series = df['high'].rolling(window=lookback, min_periods=lookback).idxmax()
+    low_idx_series = df['low'].rolling(window=lookback, min_periods=lookback).idxmin()
     
-    # 벡터 연산으로 고점/저점 인덱스 계산
-    for i in range(lookback, len(df)):
-        window = df.iloc[i - lookback:i]
-        if len(window) > 0:
-            high_idx_series.iloc[i] = window['high'].idxmax()
-            low_idx_series.iloc[i] = window['low'].idxmin()
+    # 인덱스 위치로 변환 (벡터 연산)
+    # 인덱스 위치 딕셔너리 생성 (한 번만 생성)
+    index_positions = pd.Series(range(len(df.index)), index=df.index)
     
-    # 인덱스 비교를 위해 인덱스 위치로 변환 (벡터 연산)
-    # get_loc을 사용하여 인덱스 위치를 한 번에 계산
-    index_positions = {idx: pos for pos, idx in enumerate(df.index)}
-    
+    # 벡터 연산으로 인덱스 위치 매핑
     high_pos = high_idx_series.map(index_positions)
     low_pos = low_idx_series.map(index_positions)
     

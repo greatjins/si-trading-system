@@ -210,18 +210,23 @@ class DataRepository:
                     has_file_data = False
                     file_data = None
             
-            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우에만, LSMarketService를 사용하여 API 호출
+            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우에만, LS Market API를 호출하여 과거 데이터를 가져옴
             # has_db_data와 has_file_data가 모두 False인 경우 = 두 저장소 모두에 데이터가 전혀 없는 경우
             if not has_db_data and not has_file_data:
-                logger.info(f"No data found in DB or file for {symbol} ({interval}), fetching from broker API using LSMarketService...")
+                logger.info(
+                    f"No data found in DB or file storage for {symbol} ({interval}), "
+                    f"fetching from LS Market API using LSMarketService..."
+                )
                 
-                # LSMarketService를 사용하여 API 호출
+                # LSMarketService를 사용하여 LS Market API 호출
                 ohlc_list = self._fetch_from_ls_market_service(symbol, interval, start_date, end_date)
                 
                 # API 호출 결과가 없으면 빈 DataFrame 반환
                 if not ohlc_list:
-                    logger.warning(f"No data fetched from broker API for {symbol}")
+                    logger.warning(f"No data fetched from LS Market API for {symbol} ({interval})")
                     return pd.DataFrame()
+                
+                logger.info(f"Fetched {len(ohlc_list)} OHLC records from LS Market API: {symbol} ({interval})")
                 
                 # 4. API로 받은 데이터를 시스템 표준 스키마로 변환
                 # OHLC 리스트를 DataFrame으로 변환 (표준 스키마: timestamp, open, high, low, close, volume)
@@ -265,14 +270,20 @@ class DataRepository:
                     logger.error(f"Failed to convert API data to standard format: {e}", exc_info=True)
                     return pd.DataFrame()
                 
-                # 5. 변환된 데이터를 data/storage.py를 통해 Parquet 파일로 즉시 저장 (Caching)
+                # 5. 받아온 데이터를 즉시 data/storage.py를 통해 Parquet 파일로 저장(Caching)
                 # 반환하기 전에 자동으로 저장하여 다음 조회 시 빠르게 로드 가능
                 try:
-                    # data/storage.py의 save_ohlc 메서드를 통해 Parquet 파일로 저장
+                    # data/storage.py의 save_ohlc 메서드를 통해 Parquet 파일로 즉시 저장
                     self._save_to_parquet(symbol, interval, ohlc_list)
-                    logger.info(f"Successfully cached {len(ohlc_list)} OHLC records to Parquet file: {symbol} ({interval})")
+                    logger.info(
+                        f"Successfully cached {len(ohlc_list)} OHLC records to Parquet file: "
+                        f"{symbol} ({interval})"
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to save to Parquet (data will still be returned): {e}", exc_info=True)
+                    logger.warning(
+                        f"Failed to save to Parquet file (data will still be returned): {e}",
+                        exc_info=True
+                    )
                     # 저장 실패해도 데이터는 반환 (다음 조회 시 다시 시도)
                 
                 # DB에 저장 시도 (선택적, use_db가 True인 경우에만)
@@ -283,7 +294,10 @@ class DataRepository:
                     except Exception as e:
                         logger.warning(f"Failed to save to DB: {e}")
                 
-                logger.info(f"Successfully loaded {len(data)} records from broker API and cached: {symbol} ({interval})")
+                logger.info(
+                    f"Successfully loaded {len(data)} records from LS Market API, "
+                    f"cached to Parquet, and returned: {symbol} ({interval})"
+                )
                 return data
             else:
                 # 캐시에 일부 데이터가 있지만 부족한 경우, 기존 데이터 반환

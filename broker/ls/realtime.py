@@ -185,7 +185,7 @@ class LSRealtimeService:
         실시간 데이터 스트리밍
         
         실제 수신된 WebSocket 데이터를 파싱하여 
-        {'symbol', 'price', 'status', 'timestamp'} 형태의 딕셔너리를 yield 합니다.
+        {'symbol', 'price', 'volume', 'status', 'timestamp'} 형태의 딕셔너리를 yield 합니다.
         
         Args:
             symbols: 구독할 종목 코드 리스트
@@ -194,8 +194,9 @@ class LSRealtimeService:
             실시간 가격 데이터 딕셔너리:
             {
                 'symbol': str,      # 종목코드 (예: "005930")
-                'price': float,    # 현재가
-                'status': str,      # 장상태 (JIF에서 받은 정보)
+                'price': float,     # 현재가
+                'volume': int,       # 체결량
+                'status': str,       # 장상태 (JIF에서 받은 정보)
                 'timestamp': datetime  # 체결시간
             }
         """
@@ -262,7 +263,7 @@ class LSRealtimeService:
         """
         WebSocket 메시지 파싱 (S3_ 실시간 주식체결, JIF 장운영정보)
         
-        실제 수신된 데이터를 파싱하여 {'symbol', 'price', 'status', 'timestamp'} 형태로 변환합니다.
+        실제 수신된 데이터를 파싱하여 {'symbol', 'price', 'volume', 'status', 'timestamp'} 형태로 변환합니다.
         
         LS증권 S3_ 메시지 형식:
         {
@@ -300,7 +301,7 @@ class LSRealtimeService:
             data: 원본 WebSocket 메시지 (JSON 파싱된 딕셔너리)
         
         Returns:
-            파싱된 데이터 {'symbol', 'price', 'status', 'timestamp'} 또는 None
+            파싱된 데이터 {'symbol', 'price', 'volume', 'status', 'timestamp'} 또는 None
         """
         try:
             # 헤더에서 TR 코드 확인
@@ -325,10 +326,11 @@ class LSRealtimeService:
                     logger.debug(f"JIF 업데이트: jangubun={jangubun}, jstatus={jstatus}")
                     
                     # JIF 메시지도 status 정보를 포함하여 반환
-                    # 표준 형식: {'symbol', 'price', 'status', 'timestamp'}
+                    # 표준 형식: {'symbol', 'price', 'volume', 'status', 'timestamp'}
                     return {
                         "symbol": "",  # JIF는 종목별 정보가 아님
                         "price": 0.0,
+                        "volume": 0,
                         "status": jstatus,  # 장상태
                         "timestamp": datetime.now()
                     }
@@ -365,6 +367,14 @@ class LSRealtimeService:
                 logger.warning(f"Invalid price format: {price_str} for symbol {symbol}")
                 return None
             
+            # 체결량 추출 및 변환
+            volume_str = output.get("CNTG_VOL", "0").strip()
+            try:
+                volume = int(volume_str) if volume_str else 0
+            except (ValueError, TypeError):
+                logger.debug(f"Invalid volume format: {volume_str} for symbol {symbol}, using 0")
+                volume = 0
+            
             # 체결시간 파싱 (HHMMSS 형식)
             time_str = output.get("STCK_CNTG_HOUR", "").strip()
             timestamp = datetime.now()  # 기본값: 현재 시간
@@ -387,10 +397,11 @@ class LSRealtimeService:
             status_info = self.market_status_manager.get_status()
             status = status_info.get("krx_status") or status_info.get("nxt_status") or ""
             
-            # 표준 형식으로 변환하여 반환 {'symbol', 'price', 'status', 'timestamp'}
+            # 표준 형식으로 변환하여 반환 {'symbol', 'price', 'volume', 'status', 'timestamp'}
             parsed_result = {
                 "symbol": symbol,
                 "price": price,
+                "volume": volume,  # 체결량
                 "status": status,  # 장상태 정보 (jstatus)
                 "timestamp": timestamp
             }
