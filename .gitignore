@@ -49,6 +49,9 @@ data/redis/
 *.backup_*
 data/debug_*.py
 
+# OHLC Data (Parquet files)
+data/ohlc/
+
 # Logs
 *.log
 logs/
