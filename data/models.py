@@ -348,3 +348,16 @@ class BacktestLiveComparisonModel(Base):
     
     def __repr__(self) -> str:
         return f"<BacktestLiveComparison(id={self.id}, return_diff={self.return_difference:.2%})>"
+
+
+class ActiveUniverseModel(Base):
+    """활성 유니버스 테이블 (스캐너가 필터링한 종목 리스트)"""
+    __tablename__ = "active_universe"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    scan_date = Column(DateTime, nullable=False, index=True)  # 스캔 실행 날짜 (Date로 저장)
+    created_at = Column(DateTime, default=datetime.now)
+    
+    def __repr__(self) -> str:
+        return f"<ActiveUniverse(symbol={self.symbol}, scan_date={self.scan_date})>"

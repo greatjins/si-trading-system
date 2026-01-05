@@ -84,6 +84,77 @@ class ExecutionEngine:
         
         logger.info(f"ExecutionEngine initialized: {strategy.name}, timeframe={self.timeframe}")
     
+    @classmethod
+    async def create_from_db_config(
+        cls,
+        broker: BrokerBase,
+        risk_manager: RiskManager,
+        strategy_config_id: Optional[int] = None,
+        timeframe: str = None,
+        notification_manager: Optional[NotificationManager] = None
+    ) -> 'ExecutionEngine':
+        """
+        DB에서 전략 설정을 로드하여 ExecutionEngine 생성
+        
+        Args:
+            broker: 브로커 어댑터
+            risk_manager: 리스크 관리자
+            strategy_config_id: 전략 설정 ID (None이면 '사용자 선정 베스트 전략' 사용)
+            timeframe: 타임프레임
+            notification_manager: 알림 관리자
+        
+        Returns:
+            ExecutionEngine 인스턴스
+        """
+        from data.repository import get_db_session
+        from data.models import StrategyBuilderModel
+        from core.strategy.factory import StrategyFactory
+        
+        session = get_db_session()
+        try:
+            # 전략 설정 조회
+            if strategy_config_id is None:
+                # '사용자 선정 베스트 전략' 조회 (is_active=True이고 최신 업데이트 순)
+                strategy_config = session.query(StrategyBuilderModel).filter_by(
+                    is_active=True
+                ).order_by(
+                    StrategyBuilderModel.updated_at.desc()
+                ).first()
+            else:
+                strategy_config = session.query(StrategyBuilderModel).filter_by(
+                    id=strategy_config_id,
+                    is_active=True
+                ).first()
+            
+            if not strategy_config:
+                raise ValueError("활성화된 전략 설정을 찾을 수 없습니다")
+            
+            logger.info(f"Loading strategy from DB: id={strategy_config.id}, name={strategy_config.name}")
+            
+            # 전략 인스턴스 생성
+            db_config = {
+                "id": strategy_config.id,
+                "name": strategy_config.name,
+                "config_json": strategy_config.config_json,
+                "config": strategy_config.config
+            }
+            strategy = StrategyFactory.create_from_db_config(db_config)
+            
+            # ExecutionEngine 생성
+            engine = cls(
+                strategy=strategy,
+                broker=broker,
+                risk_manager=risk_manager,
+                timeframe=timeframe,
+                notification_manager=notification_manager
+            )
+            engine.strategy_id = strategy_config.id
+            
+            return engine
+        
+        finally:
+            session.close()
+    
     async def start(self, symbols: List[str]) -> None:
         """
         실시간 실행 시작
@@ -151,6 +222,40 @@ class ExecutionEngine:
                 metadata={"strategy_id": self.strategy_id}
             )
             logger.info("Execution engine stopped")
+    
+    async def start_with_active_universe(self) -> None:
+        """
+        active_universe 테이블에서 종목 리스트를 읽어와 실시간 감시 시작
+        
+        scanner.py가 필터링한 종목 리스트를 DB에서 읽어와
+        각 종목에 전략을 할당하여 실시간 감시를 시작합니다.
+        """
+        from data.repository import get_db_session
+        from data.models import ActiveUniverseModel
+        
+        session = get_db_session()
+        try:
+            # 오늘 날짜의 active_universe 조회
+            today = datetime.now().date()
+            today_start = datetime.combine(today, datetime.min.time())
+            today_end = datetime.combine(today, datetime.max.time())
+            active_symbols = session.query(ActiveUniverseModel).filter(
+                ActiveUniverseModel.scan_date >= today_start,
+                ActiveUniverseModel.scan_date <= today_end
+            ).all()
+            
+            if not active_symbols:
+                logger.warning(f"No active universe found for today ({today})")
+                return
+            
+            symbols = [s.symbol for s in active_symbols]
+            logger.info(f"Loaded {len(symbols)} symbols from active_universe")
+            
+            # 실시간 감시 시작
+            await self.start(symbols)
+        
+        finally:
+            session.close()
     
     async def stop(self) -> None:
         """실행 중단"""
@@ -257,35 +362,72 @@ class ExecutionEngine:
         현재 시간과 장운영정보에 따라 시장 구분 결정
         
         우선순위:
-        1. MarketStatusManager의 활성 상태 확인
-        2. 시간대별 기본 시장 구분
+        1. JIF(장운영정보)의 실제 jangubun과 jstatus 값 최우선 참조
+        2. jstatus가 41(장종료)이면 해당 시장으로 주문하지 않음
+        3. MarketStatusManager의 활성 상태 확인
+        4. 시간대별 기본 시장 구분
         
         Returns:
             "KRX" 또는 "NXT" 또는 None (주문 불가 시간)
         """
         from datetime import timezone, timedelta
         
+        # JIF 상태 정보 가져오기 (최우선 참조)
+        status_info = self.market_status_manager.get_status()
+        krx_status = status_info.get("krx_status")
+        nxt_status = status_info.get("nxt_status")
+        
+        # 장종료(41) 신호 확인 - 최우선 방어 로직
+        if krx_status == "41":
+            logger.warning(
+                f"KRX 장종료 신호 수신 (jstatus=41). 시간이 남았더라도 KRX로 주문하지 않습니다. "
+                f"현재 시간: {get_exchange_time().time().strftime('%H:%M:%S')}"
+            )
+            # NXT가 활성 상태이면 NXT 반환, 아니면 None
+            if status_info.get("nxt_active", False) and nxt_status != "41":
+                return "NXT"
+            return None
+        
+        if nxt_status == "41":
+            logger.warning(
+                f"NXT 장종료 신호 수신 (jstatus=41). 시간이 남았더라도 NXT로 주문하지 않습니다. "
+                f"현재 시간: {get_exchange_time().time().strftime('%H:%M:%S')}"
+            )
+            # KRX가 활성 상태이면 KRX 반환, 아니면 None
+            if status_info.get("krx_active", False) and krx_status != "41":
+                return "KRX"
+            return None
+        
         # 거래소 시간 사용 (서버 시간 동기화)
         exchange_time = get_exchange_time()
         current_time = exchange_time.time()
         
         # MarketStatusManager의 활성 상태 확인
-        krx_active = self.market_status_manager.is_market_active("KRX")
-        nxt_active = self.market_status_manager.is_market_active("NXT")
+        krx_active = status_info.get("krx_active", False)
+        nxt_active = status_info.get("nxt_active", False)
         
-        # 활성 상태가 있으면 우선 사용
-        if krx_active and nxt_active:
-            # 둘 다 활성인 경우 시간대에 따라 우선순위 결정
-            if time(9, 0) <= current_time <= time(15, 30):
-                return "KRX"  # 정규장 시간대는 KRX 우선
+        # JIF 상태 정보가 있으면 우선 사용
+        if krx_status is not None or nxt_status is not None:
+            # JIF 상태 기반으로 시장 결정
+            if krx_active and nxt_active:
+                # 둘 다 활성인 경우 시간대에 따라 우선순위 결정
+                if time(9, 0) <= current_time <= time(15, 30):
+                    return "KRX"  # 정규장 시간대는 KRX 우선
+                else:
+                    return "NXT"  # 시간외 시간대는 NXT 우선
+            elif krx_active:
+                return "KRX"
+            elif nxt_active:
+                return "NXT"
             else:
-                return "NXT"  # 시간외 시간대는 NXT 우선
-        elif krx_active:
-            return "KRX"
-        elif nxt_active:
-            return "NXT"
+                # JIF 상태는 있지만 둘 다 비활성인 경우
+                logger.warning(
+                    f"JIF 상태 확인: KRX jstatus={krx_status}, NXT jstatus={nxt_status}. "
+                    f"둘 다 비활성 상태입니다."
+                )
+                return None
         
-        # 활성 상태가 없으면 시간대별 기본 시장 구분
+        # JIF 상태 정보가 없으면 시간대별 기본 시장 구분 (폴백)
         # 08:00 ~ 08:50: NXT (장전 시간외)
         if time(8, 0) <= current_time < time(8, 50):
             return "NXT"
@@ -301,7 +443,8 @@ class ExecutionEngine:
         # 그 외 시간은 주문 불가
         logger.warning(
             f"주문 불가 시간대입니다. 현재 시간: {current_time.strftime('%H:%M:%S')} (KST), "
-            f"KRX 활성={krx_active}, NXT 활성={nxt_active}"
+            f"KRX 활성={krx_active}, NXT 활성={nxt_active}, "
+            f"KRX jstatus={krx_status}, NXT jstatus={nxt_status}"
         )
         return None
     
