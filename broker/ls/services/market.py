@@ -671,3 +671,61 @@ class LSMarketService:
         except Exception as e:
             logger.error(f"Failed to get financial info: {e}")
             raise
+    
+    async def get_server_time(self) -> datetime:
+        """
+        서버 시간 조회 (t0167 - 서버시간조회)
+        
+        Returns:
+            서버 시간 (datetime 객체)
+        """
+        try:
+            logger.info("Fetching server time (t0167)")
+            
+            # LS증권 서버시간조회 API (t0167)
+            response = await self.client.request(
+                method="POST",
+                endpoint="/etc/time-search",
+                data={
+                    "t0167InBlock": {
+                        "id": ""  # id 필드 (8자리, 공백 가능)
+                    }
+                },
+                headers={
+                    "tr_cd": "t0167",
+                    "tr_cont": "N",
+                    "tr_cont_key": "",
+                    "mac_address": "",
+                    "custtype": "P"
+                }
+            )
+            
+            # 응답 파싱
+            output = response.get("t0167OutBlock", {})
+            date_str = output.get("dt", "")  # YYYYMMDD
+            time_str = output.get("time", "")  # HHMMSSssssss (12자리)
+            
+            if not date_str or not time_str:
+                raise ValueError("서버 시간 응답이 올바르지 않습니다")
+            
+            # 시간 파싱 (HHMMSSssssss -> HHMMSS만 사용)
+            hour = int(time_str[:2])
+            minute = int(time_str[2:4])
+            second = int(time_str[4:6])
+            
+            # 날짜 파싱 (YYYYMMDD)
+            year = int(date_str[:4])
+            month = int(date_str[4:6])
+            day = int(date_str[6:8])
+            
+            # 서버 시간 생성 (KST)
+            from datetime import timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            server_time = datetime(year, month, day, hour, minute, second, tzinfo=kst)
+            
+            logger.info(f"Server time: {server_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            return server_time
+        
+        except Exception as e:
+            logger.error(f"Failed to get server time: {e}")
+            raise

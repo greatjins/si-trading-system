@@ -10,6 +10,7 @@ from datetime import datetime, time
 from utils.logger import setup_logger
 from utils.exceptions import ConnectionError
 from broker.ls.endpoints import LSEndpoints
+from broker.ls.services.market_status import MarketStatusManager
 
 logger = setup_logger(__name__)
 
@@ -36,6 +37,9 @@ class LSRealtimeService:
         self.ws_url = LSEndpoints.get_wss_url(paper_trading=paper_trading)
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
+        
+        # 장운영정보 관리자
+        self.market_status_manager = MarketStatusManager()
         
         logger.info(f"LSRealtimeService initialized (URL: {self.ws_url})")
     
@@ -99,6 +103,25 @@ class LSRealtimeService:
             raise ConnectionError("WebSocket not connected")
         
         logger.info(f"Subscribing to symbols: {symbols} (TR: S3_)")
+        
+        # 장운영정보(JIF) 구독 (단축코드 없이)
+        try:
+            jif_subscribe_msg = {
+                "header": {
+                    "token": self.access_token,  # OAuth 토큰
+                    "tr_type": "3"  # 3: 실시간 시세 등록
+                },
+                "body": {
+                    "tr_cd": "JIF",  # 장운영정보 TR 코드
+                    "tr_key": ""  # 단축코드 없이 (전체 장운영정보)
+                }
+            }
+            jif_message = json.dumps(jif_subscribe_msg, ensure_ascii=False)
+            await self.websocket.send(jif_message)
+            logger.info("Subscribed to JIF (장운영정보)")
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Failed to subscribe to JIF: {e}", exc_info=True)
         
         # LS증권 실시간 주식체결(S3_) 구독 메시지 전송
         for symbol in symbols:
@@ -205,7 +228,7 @@ class LSRealtimeService:
     
     def _parse_realtime_data(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        WebSocket 메시지 파싱 (S3_ 실시간 주식체결)
+        WebSocket 메시지 파싱 (S3_ 실시간 주식체결, JIF 장운영정보)
         
         LS증권 S3_ 메시지 형식:
         {
@@ -225,6 +248,18 @@ class LSRealtimeService:
             }
         }
         
+        JIF 메시지 형식:
+        {
+            "header": {
+                "tr_cd": "JIF",
+                ...
+            },
+            "body": {
+                "jangubun": "1",  # 장구분 (1:코스피, 2:코스닥, 6:NXT)
+                "jstatus": "21"   # 장상태
+            }
+        }
+        
         Args:
             data: 원본 WebSocket 메시지
         
@@ -235,6 +270,19 @@ class LSRealtimeService:
             # 헤더에서 TR 코드 확인
             header = data.get("header", {})
             tr_cd = header.get("tr_cd", "")
+            
+            # JIF (장운영정보) 메시지 처리
+            if tr_cd == "JIF":
+                body = data.get("body", {})
+                jangubun = body.get("jangubun", "")
+                jstatus = body.get("jstatus", "")
+                
+                if jangubun and jstatus:
+                    self.market_status_manager.update_jif(jangubun, jstatus)
+                    logger.debug(f"JIF 업데이트: jangubun={jangubun}, jstatus={jstatus}")
+                
+                # JIF는 가격 데이터가 아니므로 None 반환
+                return None
             
             # S3_ (실시간 주식체결) 메시지만 처리
             if tr_cd != "S3_":

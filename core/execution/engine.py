@@ -3,7 +3,7 @@
 """
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pandas as pd
 
 from broker.base import BrokerBase
@@ -16,6 +16,8 @@ from utils.config import config
 from utils.bar_utils import create_bars_from_ticks, validate_bars
 from utils.signal_logger import get_signal_logger, SignalType
 from core.notifications.manager import NotificationManager, NotificationType
+from broker.ls.services.market_status import MarketStatusManager
+from broker.ls.services.time_sync import get_exchange_time, ensure_synced
 
 logger = setup_logger(__name__)
 signal_logger = get_signal_logger()
@@ -56,10 +58,14 @@ class ExecutionEngine:
         self.is_running = False
         self.symbols: List[str] = []
         self.price_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._market_close_cancelled = False  # 리셋
         
         # 주문 체결 대기 관리
         self.pending_orders: Dict[str, Dict[str, Any]] = {}  # order_id -> {order, event, timeout}
         self.order_execution_events: Dict[str, asyncio.Event] = {}  # order_id -> Event
+        
+        # 장마감 취소 플래그 (중복 호출 방지)
+        self._market_close_cancelled = False
         
         # WebSocket 체결 알림 콜백 (나중에 확장 가능)
         self.on_order_filled: Optional[Callable[[str, Order], Any]] = None
@@ -72,6 +78,9 @@ class ExecutionEngine:
         
         # 알림 관리자 (Phase 3.3)
         self.notification_manager = notification_manager or NotificationManager()
+        
+        # 장운영정보 관리자
+        self.market_status_manager = MarketStatusManager()
         
         logger.info(f"ExecutionEngine initialized: {strategy.name}, timeframe={self.timeframe}")
     
@@ -103,6 +112,16 @@ class ExecutionEngine:
         logger.info(f"Starting execution engine for {symbols}")
         
         try:
+            # 서버 시간 동기화 (시작 시 1회)
+            try:
+                from broker.ls.adapter import LSAdapter
+                if isinstance(self.broker, LSAdapter):
+                    from broker.ls.services.time_sync import ensure_synced
+                    await ensure_synced(self.broker.market_service)
+                    logger.info("Server time synchronized")
+            except Exception as e:
+                logger.warning(f"Failed to sync server time at startup: {e}")
+            
             # 실시간 데이터 스트리밍
             async for price_update in self.broker.stream_realtime(symbols):
                 if not self.is_running:
@@ -172,6 +191,12 @@ class ExecutionEngine:
             # 리스크 한도 확인
             self.risk_manager.update_equity(account.equity, timestamp)
             
+            # 장마감 확인 및 미체결 주문 취소 (중복 호출 방지)
+            if not self._market_close_cancelled:
+                if self.risk_manager.check_market_close_and_cancel_orders(self.broker, market=None):
+                    await self._cancel_all_pending_orders()
+                    self._market_close_cancelled = True
+            
             if not self.risk_manager.check_risk_limits(account):
                 logger.warning("Risk limits exceeded, skipping strategy execution")
                 
@@ -227,6 +252,59 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Error processing price update: {e}")
     
+    def determine_market(self) -> Optional[str]:
+        """
+        현재 시간과 장운영정보에 따라 시장 구분 결정
+        
+        우선순위:
+        1. MarketStatusManager의 활성 상태 확인
+        2. 시간대별 기본 시장 구분
+        
+        Returns:
+            "KRX" 또는 "NXT" 또는 None (주문 불가 시간)
+        """
+        from datetime import timezone, timedelta
+        
+        # 거래소 시간 사용 (서버 시간 동기화)
+        exchange_time = get_exchange_time()
+        current_time = exchange_time.time()
+        
+        # MarketStatusManager의 활성 상태 확인
+        krx_active = self.market_status_manager.is_market_active("KRX")
+        nxt_active = self.market_status_manager.is_market_active("NXT")
+        
+        # 활성 상태가 있으면 우선 사용
+        if krx_active and nxt_active:
+            # 둘 다 활성인 경우 시간대에 따라 우선순위 결정
+            if time(9, 0) <= current_time <= time(15, 30):
+                return "KRX"  # 정규장 시간대는 KRX 우선
+            else:
+                return "NXT"  # 시간외 시간대는 NXT 우선
+        elif krx_active:
+            return "KRX"
+        elif nxt_active:
+            return "NXT"
+        
+        # 활성 상태가 없으면 시간대별 기본 시장 구분
+        # 08:00 ~ 08:50: NXT (장전 시간외)
+        if time(8, 0) <= current_time < time(8, 50):
+            return "NXT"
+        
+        # 09:00 ~ 15:30: KRX (정규장)
+        if time(9, 0) <= current_time <= time(15, 30):
+            return "KRX"
+        
+        # 15:40 ~ 20:00: NXT (장후 시간외)
+        if time(15, 40) <= current_time <= time(20, 0):
+            return "NXT"
+        
+        # 그 외 시간은 주문 불가
+        logger.warning(
+            f"주문 불가 시간대입니다. 현재 시간: {current_time.strftime('%H:%M:%S')} (KST), "
+            f"KRX 활성={krx_active}, NXT 활성={nxt_active}"
+        )
+        return None
+    
     async def _execute_signal(
         self,
         signal: Any,
@@ -242,6 +320,12 @@ class ExecutionEngine:
             account: 계좌 정보
             positions: 현재 포지션
         """
+        # 시장 구분 확인
+        mbr_no = self.determine_market()
+        if mbr_no is None:
+            logger.warning(f"주문 불가 시간대: {signal.symbol} {signal.side.value} 주문 건너뜀")
+            return
+        
         # 중복 진입 방지
         if signal.side == OrderSide.BUY:
             existing_position = next((p for p in positions if p.symbol == signal.symbol), None)
@@ -252,8 +336,8 @@ class ExecutionEngine:
                 )
                 return
         
-        # 주문 검증 (슬리피지 체크 포함)
-        if not self.risk_manager.validate_order(signal, account, positions, current_price):
+        # 주문 검증 (슬리피지 체크 포함, 시장 구분 전달)
+        if not self.risk_manager.validate_order(signal, account, positions, current_price, market=mbr_no):
             logger.warning(f"리스크 검증 실패: {signal.symbol} {signal.side.value} {signal.quantity}")
             return
         
@@ -266,6 +350,11 @@ class ExecutionEngine:
             try:
                 # 주문 생성
                 order = signal.to_order(f"RT_{datetime.now().strftime('%Y%m%d%H%M%S')}_{attempt}")
+                
+                # mbr_no를 Order 객체에 메타데이터로 추가 (LSAdapter에서 사용)
+                if not hasattr(order, 'metadata'):
+                    order.metadata = {}
+                order.metadata['mbr_no'] = mbr_no
                 
                 # 주문 제출
                 order_id = await self.broker.place_order(order)
@@ -427,6 +516,35 @@ class ExecutionEngine:
             logger.error(f"Error cancelling order {order_id}: {e}", exc_info=True)
         finally:
             self._cleanup_order(order_id)
+    
+    async def _cancel_all_pending_orders(self) -> None:
+        """
+        모든 미체결 주문 취소 (장마감 시 호출)
+        """
+        try:
+            # 미체결 주문 목록 조회
+            open_orders = await self.broker.get_open_orders()
+            
+            if not open_orders:
+                logger.debug("No pending orders to cancel")
+                return
+            
+            logger.info(f"Cancelling {len(open_orders)} pending orders due to market close")
+            
+            # 모든 미체결 주문 취소
+            for order in open_orders:
+                try:
+                    success = await self.broker.cancel_order(order.order_id)
+                    if success:
+                        logger.info(f"Order cancelled: {order.order_id}")
+                        self._cleanup_order(order.order_id)
+                    else:
+                        logger.warning(f"Failed to cancel order: {order.order_id}")
+                except Exception as e:
+                    logger.error(f"Error cancelling order {order.order_id}: {e}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"Error cancelling all pending orders: {e}", exc_info=True)
     
     async def _handle_order_filled(self, order_id: str) -> None:
         """

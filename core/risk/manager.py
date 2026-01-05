@@ -9,6 +9,7 @@ from utils.types import Account, Position, OrderSignal
 from utils.logger import setup_logger
 from utils.exceptions import RiskLimitError
 from utils.config import config
+from broker.ls.services.market_status import MarketStatusManager
 
 logger = setup_logger(__name__)
 
@@ -67,6 +68,12 @@ class RiskManager:
         # 긴급 정지 플래그
         self.emergency_stop = False
         
+        # 장운영정보 관리자
+        self.market_status_manager = MarketStatusManager()
+        
+        # 장마감 시 미체결 주문 취소 옵션
+        self.cancel_orders_on_market_close = config.get("risk.cancel_orders_on_market_close", True)
+        
         logger.info(
             f"RiskManager initialized: "
             f"max_mdd={max_mdd:.1%}, "
@@ -111,7 +118,8 @@ class RiskManager:
         signal: OrderSignal,
         account: Account,
         positions: List[Position],
-        current_price: Optional[float] = None
+        current_price: Optional[float] = None,
+        market: Optional[str] = None
     ) -> bool:
         """
         주문 검증
@@ -121,6 +129,7 @@ class RiskManager:
             account: 계좌 정보
             positions: 현재 포지션
             current_price: 현재 시장 가격 (슬리피지 체크용, None이면 체크 스킵)
+            market: 시장 구분 ("KRX" 또는 "NXT", None이면 체크 스킵)
         
         Returns:
             주문이 유효하면 True
@@ -129,6 +138,20 @@ class RiskManager:
         if self.emergency_stop:
             logger.warning(f"Order rejected: Emergency stop active")
             return False
+        
+        # 서킷브레이크/사이드카 발동 확인
+        if market:
+            if self.market_status_manager.is_circuit_breaker_active(market):
+                logger.warning(
+                    f"Order rejected: Circuit breaker active for {market}"
+                )
+                return False
+            
+            if self.market_status_manager.is_sidecar_active(market):
+                logger.warning(
+                    f"Order rejected: Sidecar active for {market}"
+                )
+                return False
         
         # 일일 거래 횟수 제한 확인
         if not self._check_daily_trade_limit(signal.symbol):
@@ -371,5 +394,33 @@ class RiskManager:
             "daily_start_equity": self.daily_start_equity,
             "max_slippage": self.max_slippage,
             "max_daily_trades_per_symbol": self.max_daily_trades_per_symbol,
-            "today_trade_counts": today_trade_counts
+            "today_trade_counts": today_trade_counts,
+            "market_status": self.market_status_manager.get_status()
         }
+    
+    def check_market_close_and_cancel_orders(
+        self,
+        broker,
+        market: str = None
+    ) -> bool:
+        """
+        장마감 확인 및 미체결 주문 취소 필요 여부 반환
+        
+        Args:
+            broker: 브로커 어댑터 (사용하지 않지만 호환성을 위해 유지)
+            market: 시장 구분 ("KRX" 또는 "NXT", None이면 둘 다 확인)
+        
+        Returns:
+            장마감이면 True (호출자가 미체결 주문 취소 처리)
+        """
+        if not self.cancel_orders_on_market_close:
+            return False
+        
+        markets_to_check = [market] if market else ["KRX", "NXT"]
+        
+        for mkt in markets_to_check:
+            if self.market_status_manager.is_market_closed(mkt):
+                logger.info(f"{mkt} 장마감 확인: 미체결 주문 취소 필요")
+                return True
+        
+        return False
