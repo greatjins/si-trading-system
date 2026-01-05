@@ -55,16 +55,17 @@ class LSRealtimeService:
             return
         
         try:
-            # WebSocket URL: 실거래는 9443, 모의투자는 29443
-            # 사용자 요구사항에 따라 명시적으로 'wss://openapi.ls-sec.co.kr:9443/websocket' 사용
+            # LS증권 운영 서버 WebSocket URL 설정
+            # 실거래: wss://openapi.ls-sec.co.kr:9443/websocket
+            # 모의투자: wss://openapi.ls-sec.co.kr:29443/websocket
             ws_url = "wss://openapi.ls-sec.co.kr:9443/websocket"
             if self.paper_trading:
                 ws_url = "wss://openapi.ls-sec.co.kr:29443/websocket"
             
-            logger.info(f"Connecting to WebSocket: {ws_url}")
+            logger.info(f"Connecting to LS증권 WebSocket: {ws_url}")
             
-            # websockets 라이브러리를 사용하여 WSS 연결
-            # OAuth 토큰 인증 헤더 포함
+            # websockets.connect를 사용하여 LS증권 운영 서버에 연결
+            # OAuth 토큰을 헤더에 포함하여 인증
             self.websocket = await websockets.connect(
                 ws_url,
                 extra_headers={
@@ -79,7 +80,7 @@ class LSRealtimeService:
             )
             
             self.is_connected = True
-            logger.info(f"WebSocket connected successfully to {ws_url}")
+            logger.info(f"WebSocket connected successfully to LS증권 운영 서버: {ws_url}")
         
         except Exception as e:
             logger.error(f"Failed to connect WebSocket: {e}", exc_info=True)
@@ -141,7 +142,7 @@ class LSRealtimeService:
             logger.error(f"Failed to subscribe to JIF: {e}", exc_info=True)
             raise
         
-        # 2. 실시간 주식체결(S3_) 구독 메시지 전송
+        # 2. 실시간 주식체결(S3_) TR을 사용하여 구독 메시지 전송
         subscribed_count = 0
         for symbol in symbols:
             try:
@@ -150,7 +151,7 @@ class LSRealtimeService:
                     logger.warning(f"Invalid symbol format: {symbol}, skipping")
                     continue
                 
-                # LS증권 WebSocket 구독 메시지 형식
+                # LS증권 WebSocket 구독 메시지 형식 (S3_ TR 사용)
                 subscribe_msg = {
                     "header": {
                         "approval_key": self.access_token,  # OAuth 토큰
@@ -165,20 +166,20 @@ class LSRealtimeService:
                     }
                 }
                 
-                # JSON 메시지를 문자열로 변환하여 전송
+                # JSON 메시지를 문자열로 변환하여 WebSocket으로 전송
                 message = json.dumps(subscribe_msg, ensure_ascii=False)
                 await self.websocket.send(message)
                 subscribed_count += 1
-                logger.debug(f"Subscribed to {symbol} (S3_)")
+                logger.debug(f"Subscribed to {symbol} using S3_ TR")
                 
                 # 구독 메시지 간 짧은 지연 (API 제한 고려)
                 await asyncio.sleep(0.1)
             
             except Exception as e:
-                logger.error(f"Failed to subscribe to {symbol}: {e}", exc_info=True)
+                logger.error(f"Failed to subscribe to {symbol} (S3_): {e}", exc_info=True)
                 continue
         
-        logger.info(f"Successfully subscribed to {subscribed_count} symbols (S3_) and JIF")
+        logger.info(f"Successfully subscribed to {subscribed_count} symbols using S3_ TR and JIF")
     
     async def stream(self, symbols: List[str]) -> AsyncIterator[Dict[str, Any]]:
         """
@@ -204,10 +205,10 @@ class LSRealtimeService:
         await self.subscribe(symbols)
         
         try:
-            # WebSocket 메시지 수신 루프
+            # WebSocket 메시지 수신 루프 - 실제 수신된 데이터를 파싱하여 yield
             while self.is_connected and self.websocket:
                 try:
-                    # 메시지 수신 (타임아웃: 30초)
+                    # 실제 WebSocket에서 메시지 수신 (타임아웃: 30초)
                     # 바이너리 또는 텍스트(JSON) 데이터 모두 처리 가능
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
@@ -230,11 +231,11 @@ class LSRealtimeService:
                         logger.debug(f"Received non-JSON message: {message[:100]}")
                         continue
                     
-                    # 메시지 파싱 및 변환
-                    # _parse_realtime_data가 {'symbol', 'price', 'status', 'timestamp'} 형태로 반환
+                    # 실제 수신된 데이터를 파싱하여 표준 형식으로 변환
+                    # _parse_realtime_data가 {'symbol', 'price', 'volume', 'status', 'timestamp'} 형태로 반환
                     parsed_data = self._parse_realtime_data(data)
                     if parsed_data:
-                        # 표준 형식으로 yield
+                        # 파싱된 데이터를 yield하여 스트리밍
                         yield parsed_data
                 
                 except asyncio.TimeoutError:
