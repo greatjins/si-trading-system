@@ -1,4 +1,33 @@
-# AWS EC2 배포 가이드
+# 배포 가이드
+
+LS증권 개인화 HTS의 배포 관련 파일들입니다.
+
+## 🚀 빠른 시작
+
+### 자동 배포 (권장)
+`main` 브랜치에 push하면 GitHub Actions가 자동으로 배포합니다.
+
+```bash
+git push origin main
+# → 자동으로 테스트 → 빌드 → EC2 배포
+```
+
+### 수동 배포 (Windows)
+```powershell
+.\deploy\quick-deploy.ps1 -AwsIp "YOUR_EC2_IP" -KeyPath "C:\path\to\key.pem" -All
+```
+
+## 📋 설정 가이드
+
+| 가이드 | 설명 |
+|--------|------|
+| [CI/CD 자동 배포](./CICD_SETUP_GUIDE.md) | **GitHub Actions 설정 (권장)** |
+| [AWS EC2 수동 설정](./AWS_SETUP_GUIDE.md) | EC2 인스턴스 생성 및 설정 |
+| [AWS 초보자 가이드](./AWS_초등학생_가이드.md) | AWS 처음 사용자용 |
+
+---
+
+# AWS EC2 배포 가이드 (수동)
 
 ## 사전 준비
 
@@ -232,7 +261,7 @@ AWS 콘솔 → Billing → Budgets
 
 ## 다음 단계
 
-- [ ] GitHub Actions로 자동 배포 설정
+- [x] GitHub Actions로 자동 배포 설정 ✅
 - [ ] 모니터링 도구 설치 (Prometheus, Grafana)
 - [ ] 로그 수집 시스템 구축
 - [ ] 부하 테스트
