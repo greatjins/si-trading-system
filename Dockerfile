@@ -3,7 +3,8 @@ FROM node:18-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci --only=production
+# devDependencies 포함 설치 (typescript, vite 등 빌드 도구 필요)
+RUN npm ci
 
 COPY frontend/ ./
 RUN npm run build
