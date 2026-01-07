@@ -6,6 +6,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PageLayout } from '../components/Layout/PageLayout';
 import { httpClient } from '../services/http';
 
+// 타입 가드 헬퍼 함수 (163번 라인에 이미 정의됨 - hasIndicatorPattern만 추가)
+const hasIndicatorPattern = (value: string | number, pattern: string): boolean => {
+  return typeof value === 'string' && value.includes(pattern);
+};
+
 interface IndicatorParameter {
   name: string;
   type: string;
@@ -1069,7 +1074,8 @@ export const StrategyBuilderPage = () => {
                                      hasIndicatorPattern(condition.value, "RSI(") ? 'RSI' :
                                      hasIndicatorPattern(condition.value, "MACD") ? 'MACD' : 'MA'}
                               onChange={(e) => {
-                                const period = condition.value.match(/\((\d+)\)/)?.[1] || '20';
+                                const valueStr = String(condition.value);
+                                const period = valueStr.match(/\((\d+)\)/)?.[1] || '20';
                                 let newValue = '';
                                 switch(e.target.value) {
                                   case 'MA': newValue = `MA(${period})`; break;
@@ -1098,9 +1104,9 @@ export const StrategyBuilderPage = () => {
                                 <span>(</span>
                                 <input
                                   type="number"
-                                  value={condition.value.match(/\((\d+)\)/)?.[1] || '20'}
+                                  value={String(condition.value).match(/\((\d+)\)/)?.[1] || '20'}
                                   onChange={(e) => {
-                                    const indicatorType = condition.value.split('(')[0];
+                                    const indicatorType = String(condition.value).split('(')[0];
                                     const newValue = `${indicatorType}(${e.target.value})`;
                                     
                                     const updated = strategy.buyConditions.map((c) =>
@@ -1795,7 +1801,8 @@ export const StrategyBuilderPage = () => {
                                      hasIndicatorPattern(condition.value, "RSI(") ? 'RSI' :
                                      hasIndicatorPattern(condition.value, "MACD") ? 'MACD' : 'MA'}
                               onChange={(e) => {
-                                const period = condition.value.match(/\((\d+)\)/)?.[1] || '20';
+                                const valueStr = String(condition.value);
+                                const period = valueStr.match(/\((\d+)\)/)?.[1] || '20';
                                 let newValue = '';
                                 switch(e.target.value) {
                                   case 'MA': newValue = `MA(${period})`; break;
@@ -1824,9 +1831,9 @@ export const StrategyBuilderPage = () => {
                                 <span>(</span>
                                 <input
                                   type="number"
-                                  value={condition.value.match(/\((\d+)\)/)?.[1] || '20'}
+                                  value={String(condition.value).match(/\((\d+)\)/)?.[1] || '20'}
                                   onChange={(e) => {
-                                    const indicatorType = condition.value.split('(')[0];
+                                    const indicatorType = String(condition.value).split('(')[0];
                                     const newValue = `${indicatorType}(${e.target.value})`;
                                     
                                     const updated = strategy.sellConditions.map((c) =>
