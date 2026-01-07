@@ -83,20 +83,25 @@ class DataRepository:
         """
         OHLC 데이터 조회 (로컬 캐시 우선, 없으면 브로커 API 호출)
         
-        로직:
+        데이터 조회 흐름:
         1. 로컬 캐시(DB/Parquet 파일)에 데이터가 있는지 확인
            - DB 우선 조회, 데이터가 충분하면 반환
            - DB에 데이터가 없거나 부족하면 Parquet 파일 확인
+           - 파일에 데이터가 충분하면 반환 (다음 호출 시에도 여기서 읽어옴)
+        
         2. DB와 파일(storage) 모두에 데이터가 없는 경우에만, 
            broker/ls/services/market.py의 LSMarketService를 사용하여 API 직접 호출
+           - _fetch_from_api() 메서드를 통해 LSMarketService 호출
            - 일봉: get_daily_ohlc (TR 't8451' - 통합 주식차트 API)
            - 60분봉: get_minute_ohlc (TR 't8452' - 통합 주식차트 N분 API)
+        
         3. API로부터 받은 데이터를 시스템 표준 스키마로 변환
            - OHLC 리스트를 DataFrame으로 변환 (timestamp, open, high, low, close, volume)
            - 타임존 처리 및 시계열 정렬
+        
         4. 변환된 데이터를 반환하기 전에 data/storage.py를 통해 Parquet 파일로 자동 저장(Caching)
-           - 다음 조회 시 빠르게 로드 가능하도록 캐싱
-        5. LS증권 API의 초당 호출 제한을 고려한 지연 로직 포함
+           - _save_to_parquet() 메서드를 통해 저장
+           - 저장 성공 시 다음 호출부터는 API를 타지 않고 로컬 파일에서 바로 읽어옴
         
         Args:
             symbol: 종목 코드
@@ -210,20 +215,34 @@ class DataRepository:
                     has_file_data = False
                     file_data = None
             
-            # 3. DB와 파일(storage) 모두에 데이터가 없는 경우에만, LS Market API를 호출하여 과거 데이터를 가져옴
-            # has_db_data와 has_file_data가 모두 False인 경우 = 두 저장소 모두에 데이터가 전혀 없는 경우
+            # 3. 로컬(DB/파일)에 데이터가 없거나 부족한 경우, LSMarketService를 호출하여 API에서 데이터를 가져옴
+            # DB와 파일 모두에 데이터가 없거나, 데이터가 있지만 요청한 날짜 범위를 충족하지 못하는 경우
+            should_fetch_from_api = False
             if not has_db_data and not has_file_data:
+                # 로컬에 데이터가 전혀 없는 경우
+                should_fetch_from_api = True
                 logger.info(
                     f"No data found in DB or file storage for {symbol} ({interval}), "
                     f"fetching from LS Market API using LSMarketService..."
                 )
+            elif not db_data_sufficient and not file_data_sufficient:
+                # 로컬에 데이터가 있지만 요청한 날짜 범위를 충족하지 못하는 경우
+                should_fetch_from_api = True
+                logger.info(
+                    f"Insufficient data in cache for {symbol} ({interval}), "
+                    f"fetching from LS Market API using LSMarketService..."
+                )
+            
+            if should_fetch_from_api:
+                # 1. DB와 파일(storage)에 데이터가 모두 없는 경우, LSMarketService를 사용하여 API 직접 호출
+                ohlc_list = self._fetch_from_api(symbol, interval, start_date, end_date)
                 
-                # LSMarketService를 사용하여 LS Market API 호출
-                ohlc_list = self._fetch_from_ls_market_service(symbol, interval, start_date, end_date)
-                
-                # API 호출 결과가 없으면 빈 DataFrame 반환
+                # API 호출 결과가 없으면 기존 캐시 데이터 반환 (있는 경우)
                 if not ohlc_list:
                     logger.warning(f"No data fetched from LS Market API for {symbol} ({interval})")
+                    if cached_data is not None and not cached_data.empty:
+                        logger.info(f"Returning cached data for {symbol} ({interval})")
+                        return cached_data
                     return pd.DataFrame()
                 
                 logger.info(f"Fetched {len(ohlc_list)} OHLC records from LS Market API: {symbol} ({interval})")
@@ -245,6 +264,8 @@ class DataRepository:
                     
                     if data.empty:
                         logger.warning(f"Empty DataFrame after conversion for {symbol}")
+                        if cached_data is not None and not cached_data.empty:
+                            return cached_data
                         return pd.DataFrame()
                     
                     # timestamp를 인덱스로 설정
@@ -268,17 +289,27 @@ class DataRepository:
                     
                 except Exception as e:
                     logger.error(f"Failed to convert API data to standard format: {e}", exc_info=True)
+                    if cached_data is not None and not cached_data.empty:
+                        return cached_data
                     return pd.DataFrame()
                 
-                # 5. 받아온 데이터를 즉시 data/storage.py를 통해 Parquet 파일로 저장(Caching)
-                # 반환하기 전에 자동으로 저장하여 다음 조회 시 빠르게 로드 가능
+                # 2. API로 받은 데이터를 시스템 표준 규격으로 변환한 뒤, 
+                #    반환하기 전에 data/storage.py를 통해 자동으로 Parquet 파일로 저장(Caching)
+                #    데이터가 성공적으로 저장되면 다음 호출 시에는 API를 타지 않고 
+                #    로컬 파일에서 바로 읽어오도록 흐름 제어
                 try:
                     # data/storage.py의 save_ohlc 메서드를 통해 Parquet 파일로 즉시 저장
-                    self._save_to_parquet(symbol, interval, ohlc_list)
-                    logger.info(
-                        f"Successfully cached {len(ohlc_list)} OHLC records to Parquet file: "
-                        f"{symbol} ({interval})"
-                    )
+                    save_success = self._save_to_parquet(symbol, interval, ohlc_list)
+                    if save_success:
+                        logger.info(
+                            f"Successfully cached {len(ohlc_list)} OHLC records to Parquet file: "
+                            f"{symbol} ({interval}). Next call will load from local file."
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to save to Parquet file (data will still be returned): "
+                            f"Next call will try API again."
+                        )
                 except Exception as e:
                     logger.warning(
                         f"Failed to save to Parquet file (data will still be returned): {e}",
@@ -300,8 +331,8 @@ class DataRepository:
                 )
                 return data
             else:
-                # 캐시에 일부 데이터가 있지만 부족한 경우, 기존 데이터 반환
-                logger.info(f"Insufficient data in cache for {symbol} ({interval}), returning cached data")
+                # 캐시에 충분한 데이터가 있는 경우, 기존 데이터 반환
+                logger.debug(f"Using cached data for {symbol} ({interval})")
                 if cached_data is not None and not cached_data.empty:
                     return cached_data
                 return pd.DataFrame()
@@ -310,7 +341,7 @@ class DataRepository:
             logger.error(f"Failed to get OHLC data: {e}", exc_info=True)
             return pd.DataFrame()
     
-    def _fetch_from_ls_market_service(
+    def _fetch_from_api(
         self,
         symbol: str,
         interval: str,
@@ -318,10 +349,13 @@ class DataRepository:
         end_date: datetime
     ) -> List[OHLC]:
         """
-        LSMarketService를 사용하여 OHLC 데이터 가져오기 (동기 래퍼)
+        LSMarketService를 사용하여 API에서 OHLC 데이터 가져오기
         
-        - 일봉: get_daily_ohlc 사용
-        - 60분봉: get_minute_ohlc 사용
+        DB와 파일(storage)에 데이터가 모두 없는 경우에만 호출됩니다.
+        broker/ls/services/market.py의 LSMarketService를 사용하여 API를 직접 호출합니다.
+        
+        - 일봉: get_daily_ohlc 사용 (TR 't8451')
+        - 60분봉: get_minute_ohlc 사용 (TR 't8452')
         
         Args:
             symbol: 종목 코드
@@ -389,7 +423,7 @@ class DataRepository:
                 # 이벤트 루프가 없으면 새로 생성
                 return asyncio.run(_async_fetch())
         except Exception as e:
-            logger.error(f"Error in _fetch_from_ls_market_service: {e}", exc_info=True)
+            logger.error(f"Error in _fetch_from_api: {e}", exc_info=True)
             return []
     
     def _save_to_db(
@@ -439,21 +473,28 @@ class DataRepository:
         symbol: str,
         interval: str,
         ohlc_list: List[OHLC]
-    ):
+    ) -> bool:
         """
         Parquet 파일에 OHLC 데이터 저장 (동기 래퍼)
+        
+        data/storage.py를 통해 Parquet 파일로 저장하여 다음 호출 시 
+        로컬 파일에서 바로 읽어올 수 있도록 캐싱합니다.
         
         Args:
             symbol: 종목 코드
             interval: 시간 간격
             ohlc_list: OHLC 데이터 리스트
+        
+        Returns:
+            저장 성공 여부 (True: 성공, False: 실패)
         """
         async def _async_save():
             try:
-                await self.storage.save_ohlc(symbol, interval, ohlc_list)
+                result = await self.storage.save_ohlc(symbol, interval, ohlc_list)
+                return result
             except Exception as e:
                 logger.error(f"Failed to save to Parquet: {e}", exc_info=True)
-                raise
+                return False
         
         try:
             # 기존 이벤트 루프가 있으면 사용, 없으면 새로 생성
@@ -464,14 +505,15 @@ class DataRepository:
                     import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(asyncio.run, _async_save())
-                        future.result()
+                        return future.result()
                 else:
-                    loop.run_until_complete(_async_save())
+                    return loop.run_until_complete(_async_save())
             except RuntimeError:
                 # 이벤트 루프가 없으면 새로 생성
-                asyncio.run(_async_save())
+                return asyncio.run(_async_save())
         except Exception as e:
             logger.error(f"Error in _save_to_parquet: {e}", exc_info=True)
+            return False
     
     def get_ohlc_as_list(
         self,

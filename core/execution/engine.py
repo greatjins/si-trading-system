@@ -359,12 +359,16 @@ class ExecutionEngine:
     
     def determine_market(self) -> Optional[str]:
         """
-        한국 시간 기준 시간대별로 적절한 mbr_no를 반환
+        현재 시간을 보고 적절한 시장 구분(mbr_no)을 결정
         
         시간대별 시장 구분:
         - 08:00 ~ 08:50: NXT (넥스트레이드, 장전 시간외)
         - 09:00 ~ 15:30: KRX (한국거래소, 정규장)
         - 그 외 시간: None (주문 불가)
+        
+        이 메서드는 주문 시 ExecutionEngine._execute_signal()에서 호출되며,
+        결정된 값은 Order.metadata['mbr_no']를 통해 LSAdapter.place_order()로 전달되고,
+        최종적으로 LSOrderService.place_order()의 CSPAT00601InBlock1.MbrNo 필드에 포함됩니다.
         
         Returns:
             "KRX" 또는 "NXT" 또는 None (주문 불가 시간)
@@ -416,7 +420,8 @@ class ExecutionEngine:
             positions: 현재 포지션
         """
         # 시간대별 시장 구분 확인 (determine_market 메서드 사용)
-        # 08:00~08:50: NXT, 09:00~15:30: KRX
+        # 현재 시간을 보고 "KRX" 또는 "NXT"를 결정
+        # 08:00~08:50: NXT (넥스트레이드), 09:00~15:30: KRX (한국거래소)
         mbr_no = self.determine_market()
         if mbr_no is None:
             logger.warning(

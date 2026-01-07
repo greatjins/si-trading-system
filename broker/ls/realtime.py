@@ -47,7 +47,7 @@ class LSRealtimeService:
         """
         WebSocket 연결
         
-        'wss://openapi.ls-sec.co.kr:9443/websocket' 주소에 연결하고
+        'wss://openapi.ls-sec.co.kr:9443' 주소에 연결하고
         OAuth 토큰 인증 헤더를 포함합니다.
         """
         if self.is_connected and self.websocket:
@@ -55,12 +55,9 @@ class LSRealtimeService:
             return
         
         try:
-            # LS증권 운영 서버 WebSocket URL 설정
-            # 실거래: wss://openapi.ls-sec.co.kr:9443/websocket
-            # 모의투자: wss://openapi.ls-sec.co.kr:29443/websocket
-            ws_url = "wss://openapi.ls-sec.co.kr:9443/websocket"
-            if self.paper_trading:
-                ws_url = "wss://openapi.ls-sec.co.kr:29443/websocket"
+            # websockets.connect를 사용하여 실제 LS증권 서버에 연결
+            # LSEndpoints에서 URL 가져오기 (실거래: wss://openapi.ls-sec.co.kr:9443/websocket)
+            ws_url = self.ws_url  # LSEndpoints.get_wss_url()로 초기화된 URL 사용
             
             logger.info(f"Connecting to LS증권 WebSocket: {ws_url}")
             
@@ -80,7 +77,7 @@ class LSRealtimeService:
             )
             
             self.is_connected = True
-            logger.info(f"WebSocket connected successfully to LS증권 운영 서버: {ws_url}")
+            logger.info(f"WebSocket connected successfully to LS증권 서버: {ws_url}")
         
         except Exception as e:
             logger.error(f"Failed to connect WebSocket: {e}", exc_info=True)
@@ -185,7 +182,7 @@ class LSRealtimeService:
         """
         실시간 데이터 스트리밍
         
-        실제 수신된 WebSocket 데이터를 파싱하여 
+        실제 수신된 WebSocket 바이너리 데이터를 파싱하여 
         {'symbol', 'price', 'volume', 'status', 'timestamp'} 형태의 딕셔너리를 yield 합니다.
         
         Args:
@@ -205,30 +202,33 @@ class LSRealtimeService:
         await self.subscribe(symbols)
         
         try:
-            # WebSocket 메시지 수신 루프 - 실제 수신된 데이터를 파싱하여 yield
+            # WebSocket 메시지 수신 루프 - 실제 수신된 바이너리 데이터를 파싱하여 yield
             while self.is_connected and self.websocket:
                 try:
-                    # 실제 WebSocket에서 메시지 수신 (타임아웃: 30초)
-                    # 바이너리 또는 텍스트(JSON) 데이터 모두 처리 가능
-                    message = await asyncio.wait_for(
+                    # 실제 WebSocket에서 바이너리 또는 텍스트 메시지 수신 (타임아웃: 30초)
+                    raw_message = await asyncio.wait_for(
                         self.websocket.recv(),
                         timeout=30.0
                     )
                     
-                    # 바이너리 데이터인 경우 텍스트로 디코딩 시도
-                    if isinstance(message, bytes):
+                    # 바이너리 데이터 처리
+                    if isinstance(raw_message, bytes):
+                        # 바이너리 데이터를 UTF-8로 디코딩
                         try:
-                            message = message.decode('utf-8')
-                        except UnicodeDecodeError:
-                            logger.warning(f"Failed to decode binary message: {message[:50]}")
+                            message_text = raw_message.decode('utf-8')
+                        except UnicodeDecodeError as e:
+                            logger.warning(f"Failed to decode binary message: {e}, bytes: {raw_message[:50]}")
                             continue
+                    else:
+                        # 이미 텍스트인 경우
+                        message_text = raw_message
                     
-                    # JSON 파싱 시도
+                    # JSON 파싱
                     try:
-                        data = json.loads(message)
-                    except json.JSONDecodeError:
-                        # JSON이 아닌 경우, 다른 형식일 수 있으므로 로깅 후 건너뜀
-                        logger.debug(f"Received non-JSON message: {message[:100]}")
+                        data = json.loads(message_text)
+                    except json.JSONDecodeError as e:
+                        # JSON이 아닌 경우 로깅 후 건너뜀
+                        logger.debug(f"Received non-JSON message: {message_text[:100]}, error: {e}")
                         continue
                     
                     # 실제 수신된 데이터를 파싱하여 표준 형식으로 변환
@@ -241,7 +241,8 @@ class LSRealtimeService:
                 except asyncio.TimeoutError:
                     # 타임아웃 시 ping 전송 (연결 유지)
                     try:
-                        await self.websocket.ping()
+                        if self.websocket:
+                            await self.websocket.ping()
                         logger.debug("Sent ping to keep connection alive")
                     except Exception as e:
                         logger.warning(f"Ping failed: {e}")

@@ -245,9 +245,10 @@ class ICTStrategy(BaseStrategy):
         
         logger.debug(f"Liquidity pools - Highs: {len(high_clusters)}, Lows: {len(low_clusters)}")
     
-    # _detect_fair_value_gaps와 _identify_order_blocks 메서드는 
-    # utils/indicators.py의 calculate_fvg와 calculate_order_block 함수로 대체되었습니다.
-    # 이 메서드들은 더 이상 사용되지 않으며, 공통 함수를 사용하도록 변경되었습니다.
+    # 참고: FVG와 Order Block 계산은 utils/indicators.py의 공통 함수를 사용합니다.
+    # - calculate_fvg(): Fair Value Gap 계산
+    # - calculate_order_block(): Order Block 계산
+    # 이 함수들은 ict_strategy.py에서 직접 호출하여 사용합니다.
     
     def _load_daily_bars(self, current_time: datetime) -> Optional[pd.DataFrame]:
         """

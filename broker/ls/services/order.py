@@ -130,6 +130,10 @@ class LSOrderService:
             order_price = 0 if order_type.lower() == "market" else int(price)
             
             # LS증권 현물주문 API (CSPAT00601)
+            # MbrNo 필드: 현재 시간에 따라 "KRX" 또는 "NXT"를 결정하여 전달
+            # - KRX: 한국거래소 (09:00 ~ 15:30 정규장)
+            # - NXT: 넥스트레이드 (08:00 ~ 08:50 장전 시간외)
+            # ExecutionEngine.determine_market()에서 결정된 값이 Order.metadata를 통해 전달됨
             response = await self.client.request(
                 method="POST",
                 endpoint="/stock/order",
@@ -145,7 +149,7 @@ class LSOrderService:
                         "MgntrnCode": "000",  # 신용거래코드 (000:보통)
                         "LoanDt": "",  # 대출일
                         "OrdCndiTpCode": "0",  # 주문조건구분 (0:없음)
-                        "MbrNo": mbr_no  # 회원사번호 (KRX 또는 NXT) - 시간대별 시장 구분
+                        "MbrNo": mbr_no  # 회원사번호 (KRX 또는 NXT) - ExecutionEngine.determine_market()에서 결정
                     }
                 },
                 headers={
